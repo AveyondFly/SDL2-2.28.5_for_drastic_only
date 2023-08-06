@@ -76,6 +76,7 @@ SDL_EGL_CreateContext_impl(KMSDRM)
         return SDL_SetError("EGL not initialized");
     }
 
+    interval = 1;
     if (interval == 0 || interval == 1) {
         _this->egl_data->egl_swapinterval = interval;
     } else {

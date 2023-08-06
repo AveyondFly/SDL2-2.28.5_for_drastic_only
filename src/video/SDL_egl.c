@@ -1044,7 +1044,7 @@ SDL_GLContext SDL_EGL_CreateContext(_THIS, EGLSurface egl_surface)
         return NULL;
     }
 
-    _this->egl_data->egl_swapinterval = 0;
+    _this->egl_data->egl_swapinterval = 1;
 
     if (SDL_EGL_MakeCurrent(_this, egl_surface, egl_context) < 0) {
         /* Delete the context */
