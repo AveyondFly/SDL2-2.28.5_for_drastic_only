@@ -666,7 +666,7 @@ if(USE_GCC OR USE_CLANG OR USE_INTELCC OR USE_QCC)
     check_c_compiler_flag("" HAVE_NO_UNDEFINED)
     set(CMAKE_REQUIRED_FLAGS ${ORIG_CMAKE_REQUIRED_FLAGS})
     if(HAVE_NO_UNDEFINED AND NOT (USE_CLANG AND WINDOWS))
-      list(APPEND EXTRA_LDFLAGS_BUILD "-Wl,--no-undefined")
+      list(APPEND EXTRA_LDFLAGS_BUILD "-Wl,--no-undefined -lrga")
     endif()
   endif()
 

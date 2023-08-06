@@ -32,6 +32,10 @@
 #include <xf86drmMode.h>
 #include <gbm.h>
 #include <EGL/egl.h>
+#include <rga/RgaApi.h>
+#include <assert.h>
+
+#define RGA_BUFFERS_MAX (3)
 
 typedef struct SDL_VideoData
 {
@@ -52,6 +56,10 @@ typedef struct SDL_VideoData
     /* Even if we have several displays, we only have to
        open 1 FD and create 1 gbm device. */
     SDL_bool gbm_init;
+
+    struct gbm_bo* rga_buffers[RGA_BUFFERS_MAX];
+    int rga_buffer_prime_fds[RGA_BUFFERS_MAX];
+    int rga_buffer_index;
 
 } SDL_VideoData;
 

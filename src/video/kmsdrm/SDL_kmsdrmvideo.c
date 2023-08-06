@@ -44,6 +44,7 @@
 #include "SDL_kmsdrmopengles.h"
 #include "SDL_kmsdrmmouse.h"
 #include "SDL_kmsdrmdyn.h"
+#include <sys/ioctl.h>
 #include "SDL_kmsdrmvulkan.h"
 #include <sys/stat.h>
 #include <sys/param.h>
@@ -51,6 +52,7 @@
 #include <dirent.h>
 #include <poll.h>
 #include <errno.h>
+#include<stdbool.h>
 
 #ifdef __OpenBSD__
 static SDL_bool moderndri = SDL_FALSE;
@@ -67,6 +69,9 @@ static char kmsdrm_dri_cardpath[32];
 #ifndef EGL_PLATFORM_GBM_MESA
 #define EGL_PLATFORM_GBM_MESA 0x31D7
 #endif
+
+rga_info_t src_info = {0};
+rga_info_t dst_info = {0};
 
 static int get_driindex(void)
 {
@@ -328,6 +333,46 @@ static void KMSDRM_FBDestroyCallback(struct gbm_bo *bo, void *data)
     }
 
     SDL_free(fb_info);
+}
+
+static void
+KMSDRM_InitRotateBuffer(_THIS, int frameWidth, int frameHeight)
+{
+    int l_frameHeight;
+    SDL_VideoData *viddata = ((SDL_VideoData *)_this->driverdata);
+
+    // initialize 2D raster graphic acceleration unit (RGA)
+    c_RkRgaInit();
+
+    l_frameHeight = frameHeight;
+    if(l_frameHeight % 32 != 0) {
+    l_frameHeight = (frameHeight + 32) & (~31);
+    }
+
+    // create buffers for RGA with adjusted stride
+    for (int i = 0; i < RGA_BUFFERS_MAX; ++i)
+    {
+        viddata->rga_buffers[i] = KMSDRM_gbm_bo_create(viddata->gbm_dev,
+            frameWidth, l_frameHeight,
+            GBM_FORMAT_XRGB8888, GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+        assert(viddata->rga_buffers[i]);
+
+        viddata->rga_buffer_prime_fds[i] = KMSDRM_gbm_bo_get_fd(viddata->rga_buffers[i]);
+    }
+    viddata->rga_buffer_index = 0;
+
+    // setup rotation
+    src_info.fd = -1;
+    src_info.mmuFlag = 1;
+    src_info.rotation = HAL_TRANSFORM_ROT_270;
+
+    // swap width and height and adjust stride here because our source buffer is 480x854
+    rga_set_rect(&src_info.rect, 0, 0, frameHeight, frameWidth, l_frameHeight, frameWidth, RK_FORMAT_BGRA_8888);
+
+    dst_info.fd = -1;
+    dst_info.mmuFlag = 1;
+
+    rga_set_rect(&dst_info.rect, 0, 0, frameWidth, frameHeight, frameWidth, frameHeight, RK_FORMAT_BGRA_8888);
 }
 
 KMSDRM_FBInfo *KMSDRM_FBFromBO(_THIS, struct gbm_bo *bo)
@@ -848,8 +893,8 @@ static void KMSDRM_AddDisplay(_THIS, drmModeConnector *connector, drmModeRes *re
     modedata->mode_index = mode_index;
 
     display.driverdata = dispdata;
-    display.desktop_mode.w = dispdata->mode.hdisplay;
-    display.desktop_mode.h = dispdata->mode.vdisplay;
+    display.desktop_mode.w = dispdata->mode.vdisplay;
+    display.desktop_mode.h = dispdata->mode.hdisplay;
     display.desktop_mode.refresh_rate = dispdata->mode.vrefresh;
     display.desktop_mode.format = SDL_PIXELFORMAT_ARGB8888;
     display.desktop_mode.driverdata = modedata;
@@ -1124,7 +1169,8 @@ static void KMSDRM_DirtySurfaces(SDL_Window *window)
        or SetWindowFullscreen, send a fake event for now since the actual
        recreation is deferred */
     KMSDRM_GetModeToSet(window, &mode);
-    SDL_SendWindowEvent(window, SDL_WINDOWEVENT_RESIZED, mode.hdisplay, mode.vdisplay);
+    SDL_SendWindowEvent(window, SDL_WINDOWEVENT_RESIZED, mode.vdisplay, mode.hdisplay);
+
 }
 
 /* This determines the size of the fb, which comes from the GBM surface
@@ -1159,13 +1205,13 @@ int KMSDRM_CreateSurfaces(_THIS, SDL_Window *window)
        mode that's set in sync with what SDL_video.c thinks is set */
     KMSDRM_GetModeToSet(window, &dispdata->mode);
 
-    display->current_mode.w = dispdata->mode.hdisplay;
-    display->current_mode.h = dispdata->mode.vdisplay;
+    display->current_mode.w = dispdata->mode.vdisplay;
+    display->current_mode.h = dispdata->mode.hdisplay;
     display->current_mode.refresh_rate = dispdata->mode.vrefresh;
     display->current_mode.format = SDL_PIXELFORMAT_ARGB8888;
 
     windata->gs = KMSDRM_gbm_surface_create(viddata->gbm_dev,
-                                            dispdata->mode.hdisplay, dispdata->mode.vdisplay,
+                                            dispdata->mode.vdisplay, dispdata->mode.hdisplay,
                                             surface_fmt, surface_flags);
 
     if (!windata->gs) {
@@ -1189,7 +1235,7 @@ int KMSDRM_CreateSurfaces(_THIS, SDL_Window *window)
     ret = SDL_EGL_MakeCurrent(_this, windata->egl_surface, egl_context);
 
     SDL_SendWindowEvent(window, SDL_WINDOWEVENT_RESIZED,
-                        dispdata->mode.hdisplay, dispdata->mode.vdisplay);
+                        dispdata->mode.vdisplay, dispdata->mode.hdisplay);
 
     windata->egl_surface_dirty = SDL_FALSE;
 
@@ -1272,8 +1318,8 @@ void KMSDRM_GetDisplayModes(_THIS, SDL_VideoDisplay *display)
             modedata->mode_index = i;
         }
 
-        mode.w = conn->modes[i].hdisplay;
-        mode.h = conn->modes[i].vdisplay;
+        mode.w = conn->modes[i].vdisplay;
+        mode.h = conn->modes[i].hdisplay;
         mode.refresh_rate = conn->modes[i].vrefresh;
         mode.format = SDL_PIXELFORMAT_ARGB8888;
         mode.driverdata = modedata;
@@ -1386,6 +1432,13 @@ void KMSDRM_DestroyWindow(_THIS, SDL_Window *window)
     /*********************************************************************/
     SDL_free(window->driverdata);
     window->driverdata = NULL;
+        for (int i = 0; i < RGA_BUFFERS_MAX; ++i) {
+            close(viddata->rga_buffer_prime_fds[i]);
+        }
+        if (src_info.fd) {
+            close(src_info.fd);
+        }
+        c_RkRgaDeInit();
 }
 
 /**********************************************************************/
@@ -1404,6 +1457,7 @@ int KMSDRM_CreateWindow(_THIS, SDL_Window *window)
     NativeDisplayType egl_display;
     drmModeModeInfo *mode;
     int ret = 0;
+    SDL_DisplayData *data;
 
     /* Allocate window internal data */
     windata = (SDL_WindowData *)SDL_calloc(1, sizeof(SDL_WindowData));
@@ -1519,6 +1573,9 @@ int KMSDRM_CreateWindow(_THIS, SDL_Window *window)
     SDL_SetMouseFocus(window);
     SDL_SetKeyboardFocus(window);
 
+        data = (SDL_DisplayData *) SDL_GetDisplayForWindow(window)->driverdata;
+        KMSDRM_InitRotateBuffer(_this, data->mode.hdisplay, data->mode.vdisplay);
+  
     /* Tell the app that the window has moved to top-left. */
     SDL_SendWindowEvent(window, SDL_WINDOWEVENT_MOVED, 0, 0);
 
