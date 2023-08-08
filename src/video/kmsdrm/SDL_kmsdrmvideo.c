@@ -785,6 +785,24 @@ static void KMSDRM_AddDisplay(_THIS, drmModeConnector *connector, drmModeRes *re
         goto cleanup;
     }
 
+    // batocera - set resolution
+    {
+      FILE* fdDrmMode;
+      int drmMode;
+      if((fdDrmMode = fopen("/var/run/drmMode", "r")) != NULL) {
+	if(fscanf(fdDrmMode, "%i", &drmMode) == 1) {
+	  if(drmMode>=0 && drmMode<connector->count_modes) {
+	    drmModeCrtc *pcrtc = KMSDRM_drmModeGetCrtc(viddata->drm_fd, encoder->crtc_id);
+	    if(pcrtc != NULL) {
+	      KMSDRM_drmModeSetCrtc(viddata->drm_fd, pcrtc->crtc_id, pcrtc->buffer_id, 0, 0, &connector->connector_id, 1, &connector->modes[drmMode]);
+	    }
+	  }
+	}
+	fclose(fdDrmMode);
+      }
+    }
+    //
+
     /* Try to find a CRTC connected to this encoder */
     crtc = KMSDRM_drmModeGetCrtc(viddata->drm_fd, encoder->crtc_id);
 
@@ -1311,8 +1329,27 @@ void KMSDRM_GetDisplayModes(_THIS, SDL_VideoDisplay *display)
     SDL_DisplayMode mode;
     int i;
 
+    // batocera
+    int wantedMode = 0;
+    {
+      FILE* fdDrmMode;
+      int drmMode;
+      if((fdDrmMode = fopen("/var/run/drmMode", "r")) != NULL) {
+	if(fscanf(fdDrmMode, "%i", &drmMode) == 1) {
+	  if(drmMode>=0 && drmMode<conn->count_modes) {
+	    wantedMode = drmMode;
+	  }
+	}
+	fclose(fdDrmMode);
+      }
+    }
+    //
+
     for (i = 0; i < conn->count_modes; i++) {
-        SDL_DisplayModeData *modedata = SDL_calloc(1, sizeof(SDL_DisplayModeData));
+        SDL_DisplayModeData *modedata;
+        if(i != wantedMode) continue; // batocera
+
+        modedata = SDL_calloc(1, sizeof(SDL_DisplayModeData));
 
         if (modedata) {
             modedata->mode_index = i;
