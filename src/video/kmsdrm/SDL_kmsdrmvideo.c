@@ -336,24 +336,27 @@ static void KMSDRM_FBDestroyCallback(struct gbm_bo *bo, void *data)
 }
 
 static void
-KMSDRM_InitRotateBuffer(_THIS, int frameWidth, int frameHeight)
+KMSDRM_InitRotateBuffer(_THIS, int orientation, int frameWidth, int frameHeight)
 {
-    int l_frameHeight;
+    int l_frameHeight, l_frameWidth;
     SDL_VideoData *viddata = ((SDL_VideoData *)_this->driverdata);
 
     // initialize 2D raster graphic acceleration unit (RGA)
     c_RkRgaInit();
 
-    l_frameHeight = frameHeight;
-    if(l_frameHeight % 32 != 0) {
-    l_frameHeight = (frameHeight + 32) & (~31);
+    if (orientation & 1) {
+        l_frameWidth = frameWidth;
+        l_frameHeight = (frameHeight + 31) & (~31);
+    } else {
+        l_frameWidth = (frameWidth + 31) & (~31);
+        l_frameHeight = frameHeight;
     }
 
     // create buffers for RGA with adjusted stride
     for (int i = 0; i < RGA_BUFFERS_MAX; ++i)
     {
         viddata->rga_buffers[i] = KMSDRM_gbm_bo_create(viddata->gbm_dev,
-            frameWidth, l_frameHeight,
+            l_frameWidth, l_frameHeight,
             GBM_FORMAT_XRGB8888, GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
         assert(viddata->rga_buffers[i]);
 
@@ -364,10 +367,18 @@ KMSDRM_InitRotateBuffer(_THIS, int frameWidth, int frameHeight)
     // setup rotation
     src_info.fd = -1;
     src_info.mmuFlag = 1;
-    src_info.rotation = HAL_TRANSFORM_ROT_270;
+    switch (orientation) {
+    default: src_info.rotation = 0; break;
+    case 1:  src_info.rotation = HAL_TRANSFORM_ROT_90; break;
+    case 2:  src_info.rotation = HAL_TRANSFORM_ROT_180; break;
+    case 3:  src_info.rotation = HAL_TRANSFORM_ROT_270; break;
+    }
 
     // swap width and height and adjust stride here because our source buffer is 480x854
-    rga_set_rect(&src_info.rect, 0, 0, frameHeight, frameWidth, l_frameHeight, frameWidth, RK_FORMAT_BGRA_8888);
+    if (orientation & 1)
+        rga_set_rect(&src_info.rect, 0, 0, frameHeight, frameWidth, l_frameHeight, l_frameWidth, RK_FORMAT_BGRA_8888);
+    else
+        rga_set_rect(&src_info.rect, 0, 0, frameWidth, frameHeight, l_frameWidth, l_frameHeight, RK_FORMAT_BGRA_8888);
 
     dst_info.fd = -1;
     dst_info.mmuFlag = 1;
@@ -615,6 +626,52 @@ static SDL_bool KMSDRM_VrrPropId(uint32_t drm_fd, uint32_t crtc_id, uint32_t *vr
     KMSDRM_drmModeFreeObjectProperties(drm_props);
 
     return SDL_TRUE;
+}
+
+static int KMSDRM_ConnectorGetOrientation(uint32_t drm_fd,
+                                          uint32_t output_id)
+{
+    uint32_t i;
+    SDL_bool found = SDL_FALSE;
+    uint64_t orientation = DRM_MODE_PANEL_ORIENTATION_NORMAL;
+
+    drmModeObjectPropertiesPtr props = KMSDRM_drmModeObjectGetProperties(drm_fd,
+                                                                         output_id,
+                                                                         DRM_MODE_OBJECT_CONNECTOR);
+
+    // Allow forcing specific orientations for debugging.
+    const char *override = SDL_getenv("SDL_KMSDRM_ORIENTATION");
+    if (override && override[0] != '\0') {
+        int val = SDL_atoi(override);
+        return SDL_clamp(val, 0, 3);
+    }
+
+    if (!props) {
+        return 0;
+    }
+
+    for (i = 0; !found && i < props->count_props; ++i) {
+        drmModePropertyPtr drm_prop = KMSDRM_drmModeGetProperty(drm_fd, props->props[i]);
+
+        if (!drm_prop) {
+            continue;
+        }
+
+        if (SDL_strcasecmp(drm_prop->name, "panel orientation") == 0) {
+            orientation = props->prop_values[i];
+            found = SDL_TRUE;
+        }
+
+        KMSDRM_drmModeFreeProperty(drm_prop);
+    }
+
+    /* librga expresses rotations clockwise. (e.g., dts = 90? rga = 270!) */
+    switch (orientation) {
+        default:                                   return 0;
+        case DRM_MODE_PANEL_ORIENTATION_BOTTOM_UP: return 2;
+        case DRM_MODE_PANEL_ORIENTATION_LEFT_UP:   return 1;
+        case DRM_MODE_PANEL_ORIENTATION_RIGHT_UP:  return 3;
+    }
 }
 
 static SDL_bool KMSDRM_ConnectorCheckVrrCapable(uint32_t drm_fd,
@@ -887,6 +944,8 @@ static void KMSDRM_AddDisplay(_THIS, drmModeConnector *connector, drmModeRes *re
     dispdata->connector = connector;
     dispdata->crtc = crtc;
 
+    /* store current connector orientation */
+    dispdata->orientation = KMSDRM_ConnectorGetOrientation(viddata->drm_fd, connector->connector_id);
     /* save previous vrr state */
     dispdata->saved_vrr = KMSDRM_CrtcGetVrr(viddata->drm_fd, crtc->crtc_id);
     /* try to enable vrr */
@@ -911,8 +970,13 @@ static void KMSDRM_AddDisplay(_THIS, drmModeConnector *connector, drmModeRes *re
     modedata->mode_index = mode_index;
 
     display.driverdata = dispdata;
-    display.desktop_mode.w = dispdata->mode.vdisplay;
-    display.desktop_mode.h = dispdata->mode.hdisplay;
+    if (dispdata->orientation & 1) {
+        display.desktop_mode.w = dispdata->mode.vdisplay;
+        display.desktop_mode.h = dispdata->mode.hdisplay;
+    } else {
+        display.desktop_mode.w = dispdata->mode.hdisplay;
+        display.desktop_mode.h = dispdata->mode.vdisplay;
+    }
     display.desktop_mode.refresh_rate = dispdata->mode.vrefresh;
     display.desktop_mode.format = SDL_PIXELFORMAT_ARGB8888;
     display.desktop_mode.driverdata = modedata;
@@ -1176,8 +1240,10 @@ static void KMSDRM_GetModeToSet(SDL_Window *window, drmModeModeInfo *out_mode)
 
 static void KMSDRM_DirtySurfaces(SDL_Window *window)
 {
-    SDL_WindowData *windata = (SDL_WindowData *)window->driverdata;
     drmModeModeInfo mode;
+    SDL_WindowData *windata = (SDL_WindowData *)window->driverdata;
+    SDL_VideoDisplay *display = SDL_GetDisplayForWindow(window);
+    SDL_DisplayData *dispdata = (SDL_DisplayData *)display->driverdata;
 
     /* Can't recreate EGL surfaces right now, need to wait until SwapWindow
        so the correct thread-local surface and context state are available */
@@ -1187,8 +1253,10 @@ static void KMSDRM_DirtySurfaces(SDL_Window *window)
        or SetWindowFullscreen, send a fake event for now since the actual
        recreation is deferred */
     KMSDRM_GetModeToSet(window, &mode);
-    SDL_SendWindowEvent(window, SDL_WINDOWEVENT_RESIZED, mode.vdisplay, mode.hdisplay);
-
+    if (dispdata->orientation & 1)
+        SDL_SendWindowEvent(window, SDL_WINDOWEVENT_RESIZED, mode.vdisplay, mode.hdisplay);
+    else
+        SDL_SendWindowEvent(window, SDL_WINDOWEVENT_RESIZED, mode.hdisplay, mode.vdisplay);
 }
 
 /* This determines the size of the fb, which comes from the GBM surface
@@ -1222,14 +1290,18 @@ int KMSDRM_CreateSurfaces(_THIS, SDL_Window *window)
        SDL_video.c expects. Hulk-smash the display's current_mode to keep the
        mode that's set in sync with what SDL_video.c thinks is set */
     KMSDRM_GetModeToSet(window, &dispdata->mode);
-
-    display->current_mode.w = dispdata->mode.vdisplay;
-    display->current_mode.h = dispdata->mode.hdisplay;
+    if (dispdata->orientation & 1) {
+        display->current_mode.w = dispdata->mode.vdisplay;
+        display->current_mode.h = dispdata->mode.hdisplay;
+    } else {
+        display->current_mode.w = dispdata->mode.hdisplay;
+        display->current_mode.h = dispdata->mode.vdisplay;
+    }
     display->current_mode.refresh_rate = dispdata->mode.vrefresh;
     display->current_mode.format = SDL_PIXELFORMAT_ARGB8888;
 
     windata->gs = KMSDRM_gbm_surface_create(viddata->gbm_dev,
-                                            dispdata->mode.vdisplay, dispdata->mode.hdisplay,
+                                            display->current_mode.w, display->current_mode.h,
                                             surface_fmt, surface_flags);
 
     if (!windata->gs) {
@@ -1253,7 +1325,7 @@ int KMSDRM_CreateSurfaces(_THIS, SDL_Window *window)
     ret = SDL_EGL_MakeCurrent(_this, windata->egl_surface, egl_context);
 
     SDL_SendWindowEvent(window, SDL_WINDOWEVENT_RESIZED,
-                        dispdata->mode.vdisplay, dispdata->mode.hdisplay);
+                        display->current_mode.w, display->current_mode.h);
 
     windata->egl_surface_dirty = SDL_FALSE;
 
@@ -1355,8 +1427,14 @@ void KMSDRM_GetDisplayModes(_THIS, SDL_VideoDisplay *display)
             modedata->mode_index = i;
         }
 
-        mode.w = conn->modes[i].vdisplay;
-        mode.h = conn->modes[i].hdisplay;
+        if (dispdata->orientation & 1) {
+            mode.w = conn->modes[i].vdisplay;
+            mode.h = conn->modes[i].hdisplay;
+        } else {
+            mode.w = conn->modes[i].hdisplay;
+            mode.h = conn->modes[i].vdisplay;
+        }
+
         mode.refresh_rate = conn->modes[i].vrefresh;
         mode.format = SDL_PIXELFORMAT_ARGB8888;
         mode.driverdata = modedata;
@@ -1610,8 +1688,8 @@ int KMSDRM_CreateWindow(_THIS, SDL_Window *window)
     SDL_SetMouseFocus(window);
     SDL_SetKeyboardFocus(window);
 
-        data = (SDL_DisplayData *) SDL_GetDisplayForWindow(window)->driverdata;
-        KMSDRM_InitRotateBuffer(_this, data->mode.hdisplay, data->mode.vdisplay);
+    data = (SDL_DisplayData *) SDL_GetDisplayForWindow(window)->driverdata;
+    KMSDRM_InitRotateBuffer(_this, dispdata->orientation, data->mode.hdisplay, data->mode.vdisplay);
   
     /* Tell the app that the window has moved to top-left. */
     SDL_SendWindowEvent(window, SDL_WINDOWEVENT_MOVED, 0, 0);

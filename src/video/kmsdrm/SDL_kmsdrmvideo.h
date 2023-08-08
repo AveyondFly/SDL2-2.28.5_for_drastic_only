@@ -78,6 +78,8 @@ typedef struct SDL_DisplayData
 
     drmModeCrtc *saved_crtc; /* CRTC to restore on quit */
     SDL_bool saved_vrr;
+    
+    uint64_t orientation;
 
     /* DRM & GBM cursor stuff lives here, not in an SDL_Cursor's driverdata struct,
        because setting/unsetting up these is done on window creation/destruction,

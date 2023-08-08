@@ -177,10 +177,30 @@ static int KMSDRM_DumpCursorToBO(SDL_VideoDisplay *display, SDL_Cursor *cursor)
     }
 
     /* Copy from the cursor buffer to a buffer that we can dump to the GBM BO. */
+    uintptr_t src_buf = (uintptr_t)curdata->buffer;
+    uintptr_t dst_buf = (uintptr_t)ready_buffer;
     for (i = 0; i < curdata->h; i++) {
         for (j = 0; j < curdata->w; j++) {
-            src_row = ((uint32_t*)curdata->buffer)[i * curdata->w + j];
-            SDL_memcpy(ready_buffer + ((curdata->w - j + 1) * bo_stride) + i, &src_row, 4);
+            uintptr_t src_pixel = src_buf + (i * curdata->w + j) * 4;
+            uintptr_t dst_pixel;
+
+            int x, y;
+            if (dispdata->orientation == 0) {
+                x = j;
+                y = i;
+            } else if (dispdata->orientation == 1) {
+                x = curdata->w - i - 1;
+                y = j;
+            } else if (dispdata->orientation == 2) {
+                x = curdata->h - j - 1;
+                y = curdata->w - i - 1;
+            } else if (dispdata->orientation == 3) {
+                x = i;
+                y = curdata->h - j - 1;
+            }
+
+            dst_pixel = dst_buf + (y * bo_stride + x * sizeof(uint32_t));
+            *(uint32_t*)dst_pixel = *(uint32_t*)src_pixel;
         }
     }
 
@@ -389,7 +409,23 @@ static int KMSDRM_WarpMouseGlobal(int x, int y)
         if (dispdata->cursor_bo) {
             int ret = 0;
 
-            ret = KMSDRM_drmModeMoveCursor(dispdata->cursor_bo_drm_fd, dispdata->crtc->crtc_id, y, dispdata->mode.vdisplay + curdata->w - x);
+            if (dispdata->orientation == 0) {
+                ret = KMSDRM_drmModeMoveCursor(dispdata->cursor_bo_drm_fd, dispdata->crtc->crtc_id,
+                    x, 
+                    y);
+            } else if (dispdata->orientation == 1) {
+                ret = KMSDRM_drmModeMoveCursor(dispdata->cursor_bo_drm_fd, dispdata->crtc->crtc_id, 
+                    dispdata->mode.hdisplay - curdata->h - y,
+                    x);
+            } else if (dispdata->orientation == 2) {
+                ret = KMSDRM_drmModeMoveCursor(dispdata->cursor_bo_drm_fd, dispdata->crtc->crtc_id, 
+                    dispdata->mode.hdisplay - curdata->w - x, 
+                    dispdata->mode.vdisplay - curdata->h - y);
+            } else if (dispdata->orientation == 3) {   
+                ret = KMSDRM_drmModeMoveCursor(dispdata->cursor_bo_drm_fd, dispdata->crtc->crtc_id, 
+                    y,
+                    dispdata->mode.vdisplay - curdata->w - x);
+            }
 
             if (ret) {
                 SDL_SetError("drmModeMoveCursor() failed.");
@@ -450,7 +486,23 @@ static void KMSDRM_MoveCursor(SDL_Cursor *cursor)
             return;
         }
 
-        ret = KMSDRM_drmModeMoveCursor(dispdata->cursor_bo_drm_fd, dispdata->crtc->crtc_id, mouse->y, dispdata->mode.vdisplay - curdata->w - mouse->x);
+        if (dispdata->orientation == 0) {   
+            ret = KMSDRM_drmModeMoveCursor(dispdata->cursor_bo_drm_fd, dispdata->crtc->crtc_id,
+                mouse->x, 
+                mouse->y);
+        } else if (dispdata->orientation == 1) {
+            ret = KMSDRM_drmModeMoveCursor(dispdata->cursor_bo_drm_fd, dispdata->crtc->crtc_id, 
+                dispdata->mode.hdisplay - curdata->h - mouse->y,
+                mouse->x);
+        } else if (dispdata->orientation == 2) {
+            ret = KMSDRM_drmModeMoveCursor(dispdata->cursor_bo_drm_fd, dispdata->crtc->crtc_id, 
+                dispdata->mode.hdisplay - curdata->w - mouse->x, 
+                dispdata->mode.vdisplay - curdata->h - mouse->y);
+        } else if (dispdata->orientation == 3) {
+            ret = KMSDRM_drmModeMoveCursor(dispdata->cursor_bo_drm_fd, dispdata->crtc->crtc_id, 
+                mouse->y,
+                dispdata->mode.vdisplay - curdata->w - mouse->x);
+        }
 
         if (ret) {
             SDL_SetError("drmModeMoveCursor() failed.");
