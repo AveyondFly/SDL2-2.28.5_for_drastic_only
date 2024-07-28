@@ -33,6 +33,7 @@
 #include "../timer/SDL_timer_c.h"
 
 #include "SDL_syswm.h"
+#include <sys/mman.h>
 
 #if SDL_VIDEO_OPENGL
 #include "SDL_opengl.h"
@@ -424,6 +425,38 @@ const char *SDL_GetVideoDriver(int index)
     return NULL;
 }
 
+#define ALIGN_ADDR(addr)    ((void*)((size_t)(addr) & ~(sysconf(_SC_PAGESIZE) - 1)))
+
+void detour_hook(uint32_t old_func, uint32_t new_func)
+{
+    volatile uint8_t *base = (uint8_t *)(intptr_t)old_func;
+
+    mprotect(ALIGN_ADDR(base), sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE);
+    base[0] = 0x04;
+    base[1] = 0xf0;
+    base[2] = 0x1f;
+    base[3] = 0xe5;
+    base[4] = new_func >> 0;
+    base[5] = new_func >> 8;
+    base[6] = new_func >> 16;
+    base[7] = new_func >> 24;
+
+    __builtin___clear_cache((void *)ALIGN_ADDR(base), (void *)(ALIGN_ADDR(base) + sysconf(_SC_PAGESIZE)));
+}
+
+extern void sdl_print_string(char *p, uint32_t fg, uint32_t bg, uint32_t x, uint32_t y);
+void sdl_blit_screen_menu(uint16_t *src, uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+}
+
+void sdl_update_screen(void)
+{
+}
+
+#define FUN_PRINT_STRING 0x080a5398
+#define FUN_BLIT_SCREEN_MENU 0x080a62d8
+#define FUN_UPDATE_SCREEN 0x080a83c0
+
 /*
  * Initialize the video and event subsystems -- determine native pixel format
  */
@@ -549,6 +582,10 @@ int SDL_VideoInit(const char *driver_name)
     if (!SDL_HasScreenKeyboardSupport()) {
         SDL_StartTextInput();
     }
+
+    detour_hook(FUN_PRINT_STRING, (intptr_t)sdl_print_string);
+    //detour_hook(FUN_BLIT_SCREEN_MENU, (intptr_t)sdl_blit_screen_menu);
+    //detour_hook(FUN_UPDATE_SCREEN, (intptr_t)sdl_update_screen);
 
     /* We're ready to go! */
     return 0;

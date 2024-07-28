@@ -29,7 +29,6 @@
 #include "software/SDL_render_sw_c.h"
 #include "../video/SDL_pixels_c.h"
 
-#include <unistd.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <FreeImage.h>
@@ -37,6 +36,10 @@
 #if defined(__ANDROID__)
 #include "../core/android/SDL_android.h"
 #endif
+
+#include <sys/mman.h>
+#include <SDL2/SDL_ttf.h>
+#include <unistd.h>
 
 /* as a courtesy to iOS apps, we don't try to draw when in the background, as
 that will crash the app. However, these apps _should_ have used
@@ -135,8 +138,26 @@ static const SDL_RenderDriver *render_drivers[] = {
 };
 #endif /* !SDL_RENDER_DISABLED */
 
+#define FONT_PATH                   "/storage/.config/drastic_chn/resources/font/font.ttf"
+#define NDS_VER                     "v1.9"
+#define NDS_W                       256
+#define NDS_H                       192
+#define NDS_Wx2                     (NDS_W * 2)
+#define NDS_Hx2                     (NDS_H * 2)
+#define NDS_Wx3                     (NDS_W * 3)
+#define NDS_Hx3                     (NDS_H * 3)
+#define NDS_Wx4                     (NDS_W * 4)
+#define NDS_Hx4                     (NDS_H * 4)
+
 #define NDS_DRASTIC_H 256
 #define NDS_DRASTIC_V 192
+
+#define MENU_CURSOR_FILE            "resources/menu/640/1/cursor.png"
+#define DRASTIC_MENU_YES_FILE       "resources/menu/640/1/drastic_yes.png"
+#define DRASTIC_MENU_NO_FILE        "resources/menu/640/1/drastic_no.png"
+#define DRASTIC_MENU_CURSOR_FILE    "resources/menu/640/1/drastic_cursor.png"
+#define DRASTIC_MENU_BG0_FILE       "resources/menu/640/1/drastic_bg0.png"
+#define DRASTIC_MENU_BG1_FILE       "resources/menu/640/1/drastic_bg1.png"
 
 #define NDS_DRASTIC_SCR_MAX 2
 
@@ -171,6 +192,97 @@ enum nds_target_disp_res {
 //	DISP_RES_4K,		/* 3840x2160. */
 	DISP_RES_MAX,
 };
+
+#define ALIGN_ADDR(addr)    ((void*)((size_t)(addr) & ~(sysconf(_SC_PAGESIZE) - 1)))
+#define PREFIX "nds"
+
+#define NDS_DRASTIC_MENU_MAIN           1
+#define NDS_DRASTIC_MENU_OPTION         2
+#define NDS_DRASTIC_MENU_CONTROLLER     3
+#define NDS_DRASTIC_MENU_CONTROLLER2    4
+#define NDS_DRASTIC_MENU_FIRMWARE       5
+#define NDS_DRASTIC_MENU_CHEAT          6
+#define NDS_DRASTIC_MENU_ROM            7
+
+#ifndef MAX_PATH
+    #define MAX_PATH                128
+#endif
+
+#define MAX_MENU_LINE               128
+
+typedef struct _CUST_MENU_SUB {
+    int x;
+    int y;
+    int cheat;
+    int enable;
+    uint32_t fg;
+    uint32_t bg;
+    char msg[MAX_PATH];
+} CUST_MENU_SUB;
+
+typedef struct _CUST_MENU {
+    int cnt;
+    CUST_MENU_SUB item[MAX_MENU_LINE];
+} CUST_MENU;
+
+static CUST_MENU drastic_menu = {0};
+
+#define DEF_LANG_SLOT               0
+#define DEF_LANG_LANG               "english"
+#define LANG_FILE_LEN               16
+#define MAX_LANG_FILE               32
+#define MAX_LANG_LINE               128
+#define MAX_MENU_LINE               128
+
+    #define DEF_FB_W                640
+    #define DEF_FB_H                480
+    #define FB_BPP                  4
+    #define IMG_W                   640
+    #define IMG_H                   480
+    #define SCREEN_DMA_SIZE         (NDS_Wx2 * NDS_Hx2 * 4)
+    #define RELOAD_BG_COUNT         120
+    #define INIT_CPU_CORE           2
+    #define DEINIT_CPU_CORE         2
+    #define DEF_FONT_SIZE           24
+    #define BAT_MAX_VAL             4080000
+    #define BAT_MIN_VAL             3400000
+
+static char *translate[MAX_LANG_LINE] = {0};
+
+int FB_W = 0;
+int FB_H = 0;
+int FB_SIZE = 0;
+int LINE_H = 0;
+int TMP_SIZE = 0;
+int FONT_SIZE = 0;
+
+typedef struct _NDS {
+	TTF_Font *font;
+	struct _LANG {
+	        char trans[MAX_LANG_FILE][LANG_FILE_LEN];
+		char path[MAX_PATH];
+	} lang;
+    struct _MENU {
+	SDL_Surface *cursor;
+        struct _DRASTIC {
+            int enable;
+            SDL_Surface *bg0;
+            SDL_Surface *bg1;
+            SDL_Surface *main;
+            SDL_Surface *yes;
+            SDL_Surface *no;
+            SDL_Surface *cursor;
+	    SDL_Texture *mtext;
+        } drastic;
+        uint32_t c0;
+        uint32_t c1;
+        uint32_t c2;
+        char path[MAX_PATH];
+    } menu;
+} NDS;
+
+NDS nds = {0};
+static SDL_Surface *cvt = NULL;
 
 #define NDS_BEZELS "/storage/roms/bezels/nds/"
 
@@ -312,6 +424,47 @@ static struct nds_disp_resize disp_1080p[DISP_TGT_MODE_MAX] = {
 	},
 };
 
+#if 0
+static struct nds_disp_resize disp_480p[DISP_TGT_MODE_MAX] = {
+	[DISP_TGT_MODE_2DS] = {
+		.tgt_rect = {
+			{0, 0, 480, 360},
+			{480, 360, 160, 120},
+		},
+	},
+	[DISP_TGT_MODE_V_ORI] = {
+		.tgt_rect = {
+			{160, 0, 320, 240},
+			{160, 240, 320, 240},
+		},
+	},
+	[DISP_TGT_MODE_TOP_FULL] = {
+		.tgt_rect = {
+			{80, 0, 480, 360},
+			{240, 360, 160, 120},
+		},
+	},
+	[DISP_TGT_MODE_TOP_CONN_BOTTOM] = {
+		.tgt_rect = {
+			{0, 120, 320, 240},
+			{320, 120, 320, 240},
+		},
+	},
+	[DISP_TGT_MODE_H_SINGLE] = {
+		.tgt_rect = {
+			{0, 0, 640, 480},
+			{0, 0, 0, 0},
+		},
+	},
+	[DISP_TGT_MODE_MENU] = {
+		.tgt_rect = {
+			{0, 0, 800, 480},
+			{0, 0, 640, 480},
+		},
+	},
+};
+#endif
+
 static struct nds_disp_resize nds_disp_resize_used[DISP_MODE_MAX];
 struct nds_disp_resize *res_sel = NULL;
 
@@ -361,6 +514,128 @@ static void nds_drastic_deinit()
 		res_sel[i].bg_tex = NULL;
 	}
 }
+static void strip_newline(char *p)
+{
+    int cc = 0, len = strlen(p);
+
+    for(cc=0; cc<len; cc++) {
+        if ((p[cc] == '\r') || (p[cc] == '\n')) {
+            p[cc] = 0;
+            break;
+        }
+    }
+}
+static int lang_load(const char *lang)
+{
+    FILE *f = NULL;
+    char buf[MAX_PATH << 1] = {0};
+
+    if (strcasecmp(nds.lang.trans[DEF_LANG_SLOT], DEF_LANG_LANG)) {
+        sprintf(buf, "%s", lang);
+        f = fopen(buf, "r");
+
+        if (f != NULL) {
+            int cc = 0, len = 0;
+
+            memset(buf, 0, sizeof(buf));
+            while (fgets(buf, sizeof(buf), f)) {
+                strip_newline(buf);
+                len = strlen(buf) + 2;
+                if (len == 0) {
+                    continue;
+                }
+
+                if (translate[cc] != NULL) {
+                    free(translate[cc]);
+                }
+                translate[cc] = malloc(len);
+                if (translate[cc] != NULL) {
+                    memcpy(translate[cc], buf, len);
+                    //printf(PREFIX"Translate: \'%s\'(len=%d)\n", translate[cc], len);
+                }
+                cc+= 1;
+                if (cc >= MAX_LANG_LINE) {
+                    break;
+                }
+                memset(buf, 0, sizeof(buf));
+            }
+            fclose(f);
+        }
+        else {
+            printf(PREFIX"Failed to open lang folder \'%s\'\n", nds.lang.path);
+        }
+    }
+    return 0;
+}
+
+int reload_menu(void)
+{
+    SDL_Surface *t = NULL;
+    char *folder = "/storage/.config/drastic_chn";
+    char buf[MAX_PATH << 1] = {0};
+
+    cvt = SDL_CreateRGBSurface(SDL_SWSURFACE, FB_W, FB_H, 32, 0, 0, 0, 0);
+
+    sprintf(buf, "%s/%s", folder, MENU_CURSOR_FILE);
+    nds.menu.cursor = IMG_Load(buf);
+
+    sprintf(buf, "%s/%s", folder, DRASTIC_MENU_CURSOR_FILE);
+    nds.menu.drastic.cursor = IMG_Load(buf);
+
+    sprintf(buf, "%s/%s", folder, DRASTIC_MENU_YES_FILE);
+    t = IMG_Load(buf);
+    if (t) {
+        SDL_Rect nrt = {0, 0, LINE_H - 2, LINE_H - 2};
+        if (nds.menu.drastic.yes) {
+            SDL_FreeSurface(nds.menu.drastic.yes);
+        }
+        nds.menu.drastic.yes = SDL_CreateRGBSurface(SDL_SWSURFACE, nrt.w, nrt.h, 32, t->format->Rmask, t->format->Gmask, t->format->Bmask, t->format->Amask);
+        if (nds.menu.drastic.yes) {
+            SDL_SoftStretch(t, NULL, nds.menu.drastic.yes, NULL);
+        }
+        SDL_FreeSurface(t);
+    }
+
+    sprintf(buf, "%s/%s", folder, DRASTIC_MENU_BG0_FILE);
+    t = IMG_Load(buf);
+    if (t) {
+        if (nds.menu.drastic.bg0) {
+            SDL_FreeSurface(nds.menu.drastic.bg0);
+        }
+        nds.menu.drastic.bg0 = SDL_ConvertSurface(t, cvt->format, 0);
+        SDL_FreeSurface(t);
+    } else {
+	printf("Load bg0 failed\n");
+    }
+
+    sprintf(buf, "%s/%s", folder, DRASTIC_MENU_BG1_FILE);
+    t = IMG_Load(buf);
+    if (t) {
+        if (nds.menu.drastic.bg1) {
+            SDL_FreeSurface(nds.menu.drastic.bg1);
+        }
+        nds.menu.drastic.bg1 = SDL_ConvertSurface(t, cvt->format, 0);
+        SDL_FreeSurface(t);
+    } else {
+	printf("Load bg1 failed\n");
+    }
+
+    sprintf(buf, "%s/%s", folder, DRASTIC_MENU_NO_FILE);
+    t = IMG_Load(buf);
+    if (t) {
+        SDL_Rect nrt = {0, 0, LINE_H - 2, LINE_H - 2};
+        if (nds.menu.drastic.no) {
+            SDL_FreeSurface(nds.menu.drastic.no);
+        }
+        nds.menu.drastic.no = SDL_CreateRGBSurface(SDL_SWSURFACE, nrt.w, nrt.h, 32, t->format->Rmask, t->format->Gmask, t->format->Bmask, t->format->Amask);
+        if (nds.menu.drastic.no) {
+            SDL_SoftStretch(t, NULL, nds.menu.drastic.no, NULL);
+        }
+        SDL_FreeSurface(t);
+    }
+
+    return 0;
+}
 
 static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 {
@@ -369,6 +644,37 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 	SDL_Rect rect;
 	char texpath[PATH_MAX];
 	int i;
+
+    LINE_H = 30;
+    FONT_SIZE = DEF_FONT_SIZE;
+
+    FB_W = DEF_FB_W;
+    FB_H = DEF_FB_H;
+    FB_SIZE = FB_W * FB_H * FB_BPP * 2;
+    TMP_SIZE = FB_W * FB_H * FB_BPP;
+    nds.menu.c0 = 0xffffff;
+    nds.menu.c1 = 0x000000;
+    nds.menu.c2 = 0x289a35;
+
+	nds.menu.drastic.main = SDL_CreateRGBSurface(SDL_SWSURFACE, FB_W, FB_H, 32, 0, 0, 0, 0);
+	if (!nds.menu.drastic.main) {
+		printf("create main menu surface failed\n");
+		return;
+	}
+	nds.menu.drastic.mtext = SDL_CreateTextureFromSurface(mRenderer, nds.menu.drastic.main);
+	if (!nds.menu.drastic.mtext) {
+		printf("Create main test failed\n");
+	}
+
+	TTF_Init();
+	nds.font = TTF_OpenFont(FONT_PATH, FONT_SIZE);
+	if (!nds.font) {
+		printf("Open font failed\n");
+	}
+
+	reload_menu();
+
+	lang_load("/storage/.config/drastic_chn/resources/lang/chinese_cn");
 
 	displayIndex = SDL_GetWindowDisplayIndex(window);
 	if (displayIndex < 0) {
@@ -387,9 +693,11 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 		res_sel = disp_720p;
 	else if (rect.w == 1920 && rect.h == 1080)
 		res_sel = disp_1080p;
+	//else if (rect.w == 640 && rect.h == 480)
+	//	res_sel = disp_480p;
 
 	if (!res_sel) {
-		printf("Unsupported output resolution.");
+		printf("Unsupported output resolution.\n");
 		return;
 	}
 	disp_rect = rect;
@@ -1255,6 +1563,64 @@ static void SDL_CalculateSimulatedVSyncInterval(SDL_Renderer *renderer, SDL_Wind
 }
 #endif /* !SDL_RENDER_DISABLED */
 
+void sdl_print_string(char *p, uint32_t fg, uint32_t bg, uint32_t x, uint32_t y)
+{
+    int w = 0, h = 0;
+    SDL_Color col = {0};
+    SDL_Surface *t0 = NULL;
+    SDL_Surface *t1 = NULL;
+    static int fps_cnt = 0;
+
+    if (p && (strlen(p) > 0)) {
+        if (drastic_menu.cnt < MAX_MENU_LINE) {
+            drastic_menu.item[drastic_menu.cnt].x = x;
+            drastic_menu.item[drastic_menu.cnt].y = y;
+            drastic_menu.item[drastic_menu.cnt].fg = fg;
+            drastic_menu.item[drastic_menu.cnt].bg = bg;
+            strcpy(drastic_menu.item[drastic_menu.cnt].msg, p);
+            drastic_menu.cnt+= 1;
+        }
+        //printf(PREFIX"x:%d, y:%d, fg:0x%x, bg:0x%x, \'%s\'\n", x, y, fg, bg, p);
+    }
+#if 0
+    if ((x == 0) && (y == 0) && (fg == 0xffff) && (bg == 0x0000)) {
+        if (fps_cnt++ > 60) {
+            fps_cnt = 0;
+
+            w = strlen(p);
+            for (h=w-1; h>=0; h--) {
+                if (p[h] == ' ') {
+                    p[h] = 0;
+                    break;
+                }
+            }
+
+            col.r = 0xcc;
+            col.g = 0xcc;
+            col.b = 0x00;
+            TTF_SizeUTF8(nds.font, p, &w, &h);
+            t0 = TTF_RenderUTF8_Solid(nds.font, p, col);
+            if (t0) {
+                t1 = SDL_CreateRGBSurface(SDL_SWSURFACE, t0->w, t0->h, 32, 0, 0, 0, 0);
+                if (t1) {
+                    SDL_FillRect(t1, &t1->clip_rect, 0x000000);
+                    SDL_BlitSurface(t0, NULL, t1, NULL);
+
+                    if (fps_info) {
+                        SDL_FreeSurface(fps_info);
+                    }
+                    fps_info = SDL_ConvertSurface(t1, cvt->format, 0);
+                    SDL_FreeSurface(t1);
+                }
+                SDL_FreeSurface(t0);
+            }
+            show_fps = 1;
+        }
+    }
+#endif
+}
+
+
 SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, int index, Uint32 flags)
 {
 #if !SDL_RENDER_DISABLED
@@ -1414,7 +1780,7 @@ SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, int index, Uint32 flags)
     Android_ActivityMutex_Unlock();
 #endif
 
-	nds_drastic_init(renderer, window);
+    nds_drastic_init(renderer, window);
 
     return renderer;
 
@@ -2070,6 +2436,8 @@ int SDL_UpdateTexture(SDL_Texture *texture, const SDL_Rect *rect,
 {
     SDL_Rect real_rect;
 
+//    if (disp_mode == DISP_MODE_MENU)
+//	    return 0;
     CHECK_TEXTURE_MAGIC(texture, -1);
 
     if (pixels == NULL) {
@@ -3707,7 +4075,7 @@ static inline int SDL_RenderCopy_nds(SDL_Renderer *renderer, SDL_Texture *textur
 
 static inline bool nds_tex_is_pointer(const SDL_Texture *texture)
 {
-	return (texture->w == 32 && texture->h == 32);
+	return (texture->w == 32 && texture->h == 64);
 }
 
 static inline bool nds_pointer_in_first_screen(const SDL_Rect *dstrect)
@@ -3718,6 +4086,912 @@ static inline bool nds_pointer_in_first_screen(const SDL_Rect *dstrect)
 static inline bool nds_rect_is_first_screen(const SDL_Rect *dstrect)
 {
 	return (dstrect->x == 0 && dstrect->y == 0);
+}
+
+const char *to_lang(const char *p)
+{
+    const char *info = p;
+    char buf[MAX_PATH] = {0};
+    int cc = 0, r = 0, len = 0;
+    
+    if (!strcmp(nds.lang.trans[DEF_LANG_SLOT], DEF_LANG_LANG) || (p == NULL)) {
+        return p;
+    }
+
+    strcpy(buf, p);
+    strcat(buf, "=");
+    len = strlen(buf);
+    if ((len == 0) || (len >= MAX_PATH)) {
+        return 0;
+    }
+
+    for (cc=0; translate[cc]; cc++) {
+        if (memcmp(buf, translate[cc], len) == 0) {
+            r = 1;
+            info = &translate[cc][len];
+            //printf(PREFIX"Translate \'%s\' as \'%s\'\n", p, info);
+            break;
+        }
+    }
+
+    if (r == 0) {
+        printf(PREFIX"Failed to find the translation: \'%s\'(len=%d)\n", p, len);
+        info = p;
+    }
+    return info;
+}
+
+int draw_info(SDL_Surface *dst, const char *info, int x, int y, uint32_t fgcolor, uint32_t bgcolor)
+{
+    int w = 0, h = 0;
+    SDL_Color fg = {0};
+    SDL_Rect rt = {0, 0, 0, 0};
+    SDL_Surface *t0 = NULL;
+    SDL_Surface *t1 = NULL;
+    SDL_Surface *t2 = NULL;
+
+    h = strlen(info);
+    if ((nds.font == NULL) || (h == 0) || (h >= MAX_PATH)) {
+	printf("incorrect input\n");
+        return -1;
+    }
+
+    fg.r = (fgcolor >> 16) & 0xff;
+    fg.g = (fgcolor >> 8) & 0xff;
+    fg.b = (fgcolor >> 0) & 0xff;
+    TTF_SizeUTF8(nds.font, info, &w, &h);
+    t0 = TTF_RenderUTF8_Solid(nds.font, info, fg);
+    if (t0) {
+        rt.x = x;
+        rt.y = y;
+        if (SDL_BlitSurface(t0, NULL, dst, &rt))
+		printf("Blit suface failed\n");
+        SDL_FreeSurface(t0);
+    } else {
+	printf("TTF_RenderUTF8_Solid failed\n");
+    }
+
+    return 0;
+}
+
+static int get_current_menu_layer(void)
+{
+    int cc = 0;
+    const char *P0 = "Change Options";
+    const char *P1 = "Frame skip type";
+    const char *P2 = "D-Pad Up";
+    const char *P3 = "Enter Menu";
+    const char *P4 = "Username";
+    //const char *P5 = "KB Space: toggle cheat/folder    KB Left Ctrl: return to main menu";
+    //const char *P5 = "JS0 Button 01: toggle cheat/folder    JS0 Button 00: return to main menu";
+    const char *P5 = "Unmapped: toggle cheat/folder    Unmapped: return to main menu";
+    const char *P6 = "KB Space: select";
+
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        if (!memcmp(drastic_menu.item[cc].msg, P0, strlen(P0))) {
+            return NDS_DRASTIC_MENU_MAIN;
+        }
+        else if (!memcmp(drastic_menu.item[cc].msg, P1, strlen(P1))) {
+            return NDS_DRASTIC_MENU_OPTION;
+        }
+        else if (!memcmp(drastic_menu.item[cc].msg, P2, strlen(P2))) {
+            return NDS_DRASTIC_MENU_CONTROLLER;
+        }
+        else if (!memcmp(drastic_menu.item[cc].msg, P3, strlen(P3))) {
+            return NDS_DRASTIC_MENU_CONTROLLER2;
+        }
+        else if (!memcmp(drastic_menu.item[cc].msg, P4, strlen(P4))) {
+            return NDS_DRASTIC_MENU_FIRMWARE;
+        }
+        else if (!memcmp(drastic_menu.item[cc].msg, P5, strlen(P5))) {
+            return NDS_DRASTIC_MENU_CHEAT;
+        }
+        else if (!memcmp(drastic_menu.item[cc].msg, P6, strlen(P6))) {
+            return NDS_DRASTIC_MENU_ROM;
+        }
+    }
+
+    printf("Dump the incrrect menu msg:\n");
+    for (cc=0; cc<drastic_menu.cnt; cc++)
+	printf("%d: %s\n", cc, drastic_menu.item[cc].msg);
+
+    return -1;
+}
+
+int get_font_width(const char *info)
+{
+    int w = 0, h = 0;
+
+    if (nds.font && info) {
+	    TTF_SizeUTF8(nds.font, info, &w, &h);
+    }
+    return w;
+}
+
+static int draw_drastic_menu_main(void)
+{
+    int cc = 0;
+    int div = 1;
+    int w = 30;
+    int h = 100;
+    int draw = 0;
+    int draw_shot = 0;
+    int x = 0, y = 0;
+    SDL_Rect rt = {0};
+    CUST_MENU_SUB *p = NULL;
+    char buf[MAX_PATH << 1] = {0};
+
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        draw = 0;
+        x = 90 / div;
+        w = LINE_H / div;
+        h = 100 / div;
+
+        memset(buf, 0, sizeof(buf));
+        p = &drastic_menu.item[cc];
+        if (p->y == 201) {
+            draw = 1;
+            sprintf(buf, "%s", &p->msg[8]);
+            x = FB_W - get_font_width(buf) - 10;
+            y = 10 / div;
+        }
+        else if (p->y == 280) {
+            draw = 1;
+            y = h + (0 * w);
+            strcpy(buf, to_lang("Change Options"));
+        }
+        else if (p->y == 288) {
+            draw = 1;
+            y = h + (1 * w);
+            strcpy(buf, to_lang("Configure Controls"));
+        }
+        else if (p->y == 296) {
+            draw = 1;
+            y = h + (2 * w);
+            strcpy(buf, to_lang("Configure Firmware"));
+        }
+        else if (p->y == 304) {
+            draw = 1;
+            y = h + (3 * w);
+            strcpy(buf, to_lang("Configure Cheats"));
+        }
+        else if (p->y == 320) {
+            draw = 1;
+            y = h + (4 * w);
+            sprintf(buf, "%s %s", to_lang("Load state"), &p->msg[13]);
+        }
+        else if (p->y == 328) {
+            draw = 1;
+            y = h + (5 * w);
+            sprintf(buf, "%s %s", to_lang("Save state"), &p->msg[13]);
+        }
+        else if (p->y == 344) {
+            draw = 1;
+            y = h + (6 * w);
+            strcpy(buf, to_lang("Load new game"));
+        }
+        else if (p->y == 352) {
+            draw = 1;
+            y = h + (7 * w);
+            strcpy(buf, to_lang("Restart game"));
+        }
+        else if (p->y == 368) {
+            draw = 1;
+            y = h + (8 * w);
+            strcpy(buf, to_lang("Return to game"));
+        }
+        else if (p->y == NDS_Hx2) {
+            draw = 1;
+            y = h + (9 * w);
+            strcpy(buf, to_lang("Exit DraStic"));
+        }
+
+        if (draw) {
+            if (p->bg) {
+                rt.x = 5 / div;
+                rt.y = y - (3 / div);
+                rt.w = FB_W - (10 / div);
+                rt.h = w;
+                SDL_FillRect(nds.menu.drastic.main, &rt, SDL_MapRGB(nds.menu.drastic.main->format, 
+                    (nds.menu.c2 >> 16) & 0xff, (nds.menu.c2 >> 8) & 0xff, nds.menu.c2 & 0xff));
+                if ((p->y == 320) || (p->y == 328)) {
+                    draw_shot = 1;
+                }
+
+                if (nds.menu.drastic.cursor) {
+                    rt.x = (5 / div) + (x - nds.menu.drastic.cursor->w) / 2;
+                    rt.y -= ((nds.menu.drastic.cursor->h - LINE_H) / 2);
+                    rt.w = 0;
+                    rt.h = 0;
+                    SDL_BlitSurface(nds.menu.drastic.cursor, NULL, nds.menu.drastic.main, &rt);
+                }
+            }
+            draw_info(nds.menu.drastic.main, buf, x, y, p->bg ? nds.menu.c0 : nds.menu.c1, 0);
+        }
+    }
+
+    y = 10;
+    sprintf(buf, "Port from miyoo by kk");
+    draw_info(nds.menu.drastic.main, buf, 10, y / div, nds.menu.c1, 0);
+#if 0
+    if (draw_shot) {
+        const uint32_t len = NDS_W * NDS_H * 2;
+        uint16_t *top = malloc(len);
+        uint16_t *bottom = malloc(len);
+
+        if (top && bottom) {
+            SDL_Surface *t = NULL;
+
+            uint32_t slot = *((uint32_t *)VAR_SYSTEM_SAVESTATE_NUM);
+            nds_load_state_index _func = (nds_load_state_index)FUN_LOAD_STATE_INDEX;
+
+            memset(top, 0, len);
+            memset(bottom, 0, len);
+            _func((void*)VAR_SYSTEM, slot, top, bottom, 1);
+            t = SDL_CreateRGBSurfaceFrom(top, NDS_W, NDS_H, 16, NDS_W * 2, 0, 0, 0, 0);
+            if (t) {
+                rt.x = FB_W - (NDS_W + (nds.enable_752x560 ? 30 : 10));
+                rt.y = nds.enable_752x560 ? h - 20 : 50;
+                rt.w = NDS_W;
+                rt.h = NDS_H;
+                SDL_BlitSurface(t, NULL, nds.menu.drastic.main, &rt);
+                SDL_FreeSurface(t);
+            }
+
+            t = SDL_CreateRGBSurfaceFrom(bottom, NDS_W, NDS_H, 16, NDS_W * 2, 0, 0, 0, 0);
+            if (t) {
+                rt.x = FB_W - (NDS_W + (nds.enable_752x560 ? 30 : 10));
+                rt.y = nds.enable_752x560 ? (h + NDS_H) - 20 : 50 + NDS_H;
+                rt.w = NDS_W;
+                rt.h = NDS_H;
+                SDL_BlitSurface(t, NULL, nds.menu.drastic.main, &rt);
+                SDL_FreeSurface(t);
+            }
+        }
+
+        if (top) {
+            free(top);
+        }
+
+        if (bottom) {
+            free(bottom);
+        }
+    }
+#endif
+    return 0;
+}
+
+static int mark_double_spaces(char *p)
+{
+    int cc = 0;
+    int len = strlen(p);
+
+    for (cc=0; cc<len - 1; cc++) {
+        if ((p[cc] == ' ') && (p[cc + 1] == ' ')) {
+            p[cc] = 0;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static char* find_menu_string_tail(char *p)
+{
+    int cc = 0;
+
+    for (cc=strlen(p) - 1; cc>=0; cc--) {
+        if (p[cc] == ' ') {
+            return &p[cc + 1];
+        }
+    }
+    return NULL;
+}
+
+
+static int draw_drastic_menu_cheat(void)
+{
+    int y = 0;
+    int w = 30;
+    int cc = 0;
+    int div = 1;
+    int cnt = 0;
+    int cursor = 0;
+    SDL_Rect rt = {0};
+    int s0 = 0, s1 = 0;
+    CUST_MENU_SUB *p = NULL;
+    char buf[MAX_PATH] = {0};
+
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        p = &drastic_menu.item[cc];
+        if (p->x == 650) {
+            for (s0=0; s0<drastic_menu.cnt; s0++) {
+                if ((drastic_menu.item[s0].x == 10) && (drastic_menu.item[s0].y == p->y)) {
+                    drastic_menu.item[s0].cheat = 1;
+                    drastic_menu.item[s0].enable = strcmp(p->msg, "enabled") == 0 ? 1 : 0;
+                    break;
+                }
+            }
+        }
+    }
+
+    s0 = 0;
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        if (drastic_menu.item[cc].x == 10) {
+            memcpy(&drastic_menu.item[s0], &drastic_menu.item[cc], sizeof(drastic_menu.item[cc]));
+            s0+= 1;
+        }
+        memset(&drastic_menu.item[cc], 0, sizeof(drastic_menu.item[cc]));
+    }
+    drastic_menu.cnt = s0;
+
+    cursor = 0;
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        if (drastic_menu.item[cc].bg > 0) {
+            cursor = cc;
+        }
+    }
+
+    if (drastic_menu.cnt == 0) {
+        return 0;
+    }
+
+    if (drastic_menu.cnt < 13) {
+        s0 = 0;
+        s1 = drastic_menu.cnt;
+    }
+    else if (cursor <= 6) {
+        s0 = 0;
+        s1 = 13;
+    }
+    else if (cursor >= (drastic_menu.cnt - 7)) {
+        s0 = drastic_menu.cnt - 13;
+        s1 = drastic_menu.cnt;
+    }
+    else {
+        s0 = cursor - 6;
+        s1 = cursor + 7;
+    }
+
+    cnt = 0;
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        w = LINE_H / div;
+        memset(buf, 0, sizeof(buf));
+        p = &drastic_menu.item[cc];
+
+        if (p->x != 10) {
+            continue;
+        }
+
+        if ((cc >= s0) && (cc < s1)) {
+            y = (25 / div) + (cnt * w);
+
+            if (p->bg) {
+                rt.x = 5 / div;
+                rt.y = y - (3 / div);
+                rt.w = FB_W - (10 / div);
+                rt.h = w;
+                SDL_FillRect(nds.menu.drastic.main, &rt, SDL_MapRGB(nds.menu.drastic.main->format,
+                    (nds.menu.c2 >> 16) & 0xff, (nds.menu.c2 >> 8) & 0xff, nds.menu.c2 & 0xff));
+            }
+
+            cnt+= 1;
+            draw_info(nds.menu.drastic.main, p->msg, w / div, y, p->bg ? nds.menu.c0 : nds.menu.c1, 0);
+            if (p->cheat && nds.menu.drastic.yes && nds.menu.drastic.no) {
+                rt.x = FB_W - nds.menu.drastic.yes->w - (w / div);
+                rt.y = y - 1;
+                rt.w = 0;
+                rt.h = 0;
+                SDL_BlitSurface((p->enable > 0 ) ? nds.menu.drastic.yes : nds.menu.drastic.no, NULL, nds.menu.drastic.main, &rt);
+            }
+        }
+    }
+    return 0;
+}
+
+static int draw_drastic_menu_rom(void)
+{
+    int y = 0;
+    int w = 0;
+    int cc = 0;
+    int div = 1;
+    int chk = 0;
+    int all = 0;
+    int cnt = 0;
+    int cursor = 0;
+    SDL_Rect rt = {0};
+    int s0 = 0, s1 = 0;
+    CUST_MENU_SUB *p = NULL;
+
+
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        if (drastic_menu.item[cc].x == 10) {
+            if (drastic_menu.item[cc].bg > 0) {
+                chk = 10;
+                break;
+            }
+        }
+        if (drastic_menu.item[cc].x == 587) {
+            if (drastic_menu.item[cc].bg > 0) {
+                chk = 587;
+                break;
+            }
+        }
+    }
+
+    cursor = 0;
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        if (drastic_menu.item[cc].x == chk) {
+            if (drastic_menu.item[cc].bg > 0) {
+                break;
+            }
+            cursor+= 1;
+        }
+    }
+
+    all = 0;
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        if (drastic_menu.item[cc].x == chk) {
+            all+= 1;
+        }
+    }
+
+    if (all < 12) {
+        s0 = 0;
+        s1 = all;
+    }
+    else if (cursor <= 6) {
+        s0 = 0;
+        s1 = 12;
+    }
+    else if (cursor >= (all - 6)) {
+        s0 = all - 12;
+        s1 = all;
+    }
+    else {
+        s0 = cursor - 6;
+        s1 = cursor + 6;
+    }
+
+    {
+        uint32_t c = 0x335445;
+
+        w = LINE_H / div;
+        p = &drastic_menu.item[0];
+        rt.x = 5 / div;
+        rt.y = (25 / div) - (4 / div);
+        rt.w = FB_W - (10 / div);
+        rt.h = w;
+        SDL_FillRect(nds.menu.drastic.main, &rt, SDL_MapRGB(nds.menu.drastic.main->format, (c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff));
+        draw_info(nds.menu.drastic.main, p->msg, 20 / div, 25 / div, 0xa0cb93, 0);
+    }
+
+    cnt = 0;
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        w = LINE_H / div;
+        p = &drastic_menu.item[cc];
+        if (p->x == chk) {
+            y = (25 / div) + (((cnt - s0) + 1) * w);
+            if ((cnt >= s0) && (cnt < s1)) {
+                if (p->bg) {
+                    rt.x = 5 / div;
+                    rt.y = y - (4 / div);
+                    rt.w = FB_W - (10 / div);
+                    rt.h = w;
+                    SDL_FillRect(nds.menu.drastic.main, &rt, SDL_MapRGB(nds.menu.drastic.main->format,
+                        (nds.menu.c2 >> 16) & 0xff, (nds.menu.c2 >> 8) & 0xff, nds.menu.c2 & 0xff));
+                }
+                draw_info(nds.menu.drastic.main, p->msg, 20 / div, y, p->bg ? nds.menu.c0 : nds.menu.c1, 0);
+            }
+            cnt+= 1;
+        }
+    }
+    return 0;
+}
+
+static int draw_drastic_menu_firmware(void)
+{
+    int t = 0;
+    int w = 0;
+    int y = 0;
+    int ww = 30;
+    int cc = 0;
+    int div = 1;
+    int cnt = 0;
+    SDL_Rect rt = {0};
+    CUST_MENU_SUB *p = NULL;
+    char buf[MAX_PATH] = {0};
+    char name[MAX_PATH] = {0};
+
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        ww = LINE_H / div;
+        p = &drastic_menu.item[cc];
+        if ((p->x == 352) || (p->x == 108)) {
+            continue;
+        }
+    
+        memset(buf, 0, sizeof(buf));
+        if ((p->x != 92) && (p->x != 256)) {
+            strcat(name, p->msg);
+        }
+        else {
+            y = (25 / div) + (cnt * ww);
+            if (((p->x == 92) || (p->x == 256)) && (p->bg)) {
+                rt.x = 5 / div;
+                rt.y = y - (3 / div);
+                rt.w = FB_W - (10 / div);
+                rt.h = ww;
+                SDL_FillRect(nds.menu.drastic.main, &rt, SDL_MapRGB(nds.menu.drastic.main->format, 
+                    (nds.menu.c2 >> 16) & 0xff, (nds.menu.c2 >> 8) & 0xff, nds.menu.c2 & 0xff));
+            }
+
+            cnt+= 1;
+            if (p->y == 280) {
+                mark_double_spaces(p->msg);
+                strcpy(buf, to_lang(p->msg));
+            }
+            else if (p->y == 296) {
+                w = get_font_width(name);
+                draw_info(nds.menu.drastic.main, name, FB_W - w - (ww / div), 25 / div, nds.menu.c1, 0);
+
+                w = strlen(p->msg);
+                p->msg[w - 3] = 0;
+                for (t=14; t<w; t++) {
+                    if (p->msg[t] != ' ') {
+                        strcpy(buf, &p->msg[t]);
+                        break;
+                    }
+                }
+                w = get_font_width(buf);
+                draw_info(nds.menu.drastic.main, buf, FB_W - w - (ww / div), y, p->bg ? nds.menu.c0 : nds.menu.c1, 0);
+
+                strcpy(buf, to_lang("Favorite Color"));
+            }
+            else if (p->y <= 312) {
+                strcpy(buf, to_lang(find_menu_string_tail(p->msg)));
+                w = get_font_width(buf);
+                draw_info(nds.menu.drastic.main, buf, FB_W - w - (ww / div), y, p->bg ? nds.menu.c0 : nds.menu.c1, 0);
+
+                mark_double_spaces(p->msg);
+                strcpy(buf, to_lang(p->msg));
+            }
+            else {
+                strcpy(buf, to_lang(p->msg));
+            }
+            draw_info(nds.menu.drastic.main, buf, ww / div, y, p->bg ? nds.menu.c0 : nds.menu.c1, 0);
+        }
+    }
+    return 0;
+}
+
+static int draw_drastic_menu_controller2(void)
+{
+    int y = 0;
+    int w = 0;
+    int cc = 0;
+    int cnt = 0;
+    int div = 1;
+    int cursor = 0;
+    SDL_Rect rt = {0};
+    int s0 = 0, s1 = 0;
+    CUST_MENU_SUB *p = NULL;
+    char buf[MAX_PATH] = {0};
+
+    cursor = 0;
+    for (cc=0; cc<drastic_menu.cnt;) {
+        if ((drastic_menu.item[cc].y >= 240) && (drastic_menu.item[cc].y <= NDS_Hx2)) {
+            if ((drastic_menu.item[cc + 1].bg > 0) || (drastic_menu.item[cc + 2].bg > 0)) {
+                break;
+            }
+            cc+= 3;
+        }
+        else {
+            if (drastic_menu.item[cc].bg > 0) {
+                break;
+            }
+            cc+= 1;
+        }
+        cursor+= 1;
+    }
+    
+    if (cursor <= 6) {
+        s0 = 0;
+        s1 = 13;
+    }
+    else if (cursor >= (23 - 7)) {
+        s0 = 23 - 13;
+        s1 = 23;
+    }
+    else {
+        s0 = cursor - 6;
+        s1 = cursor + 7;
+    }
+
+    cnt = 0;
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        w = LINE_H / div;
+        p = &drastic_menu.item[cc];
+
+        if ((p->y == 224) || (p->y == 232) || (p->y == 201)) {
+            continue;
+        }
+
+        memset(buf, 0, sizeof(buf));
+        if ((cnt >= s0) && (cnt < s1)) {
+            y = (25 / div) + ((cnt - s0) * w);
+
+            if ((p->y >= 240) && (p->y <= NDS_Hx2)) {
+                if (drastic_menu.item[cc + 1].bg || drastic_menu.item[cc + 2].bg) {
+                    int sum = drastic_menu.item[cc + 1].bg + drastic_menu.item[cc + 2].bg;
+                    uint32_t c = sum > 500 ? 0xff0000 : nds.menu.c2;
+
+                    rt.x = 5 / div;
+                    rt.y = y - (3 / div);
+                    rt.w = FB_W - (10 / div);
+                    rt.h = w;
+                    SDL_FillRect(nds.menu.drastic.main, &rt, SDL_MapRGB(nds.menu.drastic.main->format, (c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff));
+                }
+                draw_info(nds.menu.drastic.main, p->msg, 20 / div, y, p->bg ? nds.menu.c0 : nds.menu.c1, 0);
+                if ((p->y >= 240) && (p->y <= NDS_Hx2)) {
+                        draw_info(nds.menu.drastic.main, to_lang(drastic_menu.item[cc + 1].msg), 300 / div, y, drastic_menu.item[cc + 1].bg ? nds.menu.c0 : nds.menu.c1, 0);
+                        draw_info(nds.menu.drastic.main, to_lang(drastic_menu.item[cc + 2].msg), 480 / div, y, drastic_menu.item[cc + 2].bg ? nds.menu.c0 : nds.menu.c1, 0);
+                }
+            }
+            else {
+                if (p->bg) {
+                    rt.x = 5 / div;
+                    rt.y = y - (3 / div);
+                    rt.w = FB_W - (10 / div);
+                    rt.h = w;
+                    SDL_FillRect(nds.menu.drastic.main, &rt, SDL_MapRGB(nds.menu.drastic.main->format, 
+                        (nds.menu.c2 >> 16) & 0xff, (nds.menu.c2 >> 8) & 0xff, nds.menu.c2 & 0xff));
+                }
+                draw_info(nds.menu.drastic.main, to_lang(p->msg), 20 / div, y, p->bg ? nds.menu.c0 : nds.menu.c1, 0);
+            }
+        }
+
+        cnt+= 1;
+        if ((p->y >= 240) && (p->y <= NDS_Hx2)) {
+            cc+= 2;
+        }
+    }
+    return 0;
+}
+
+static int draw_drastic_menu_controller(void)
+{
+    int y = 0;
+    int w = 0;
+    int cc = 0;
+    int div = 1;
+    int cnt = 0;
+    int cursor = 0;
+    SDL_Rect rt = {0};
+    int s0 = 0, s1 = 0;
+    CUST_MENU_SUB *p = NULL;
+    char buf[MAX_PATH] = {0};
+
+    cursor = 0;
+    for (cc=0; cc<drastic_menu.cnt;) {
+        if ((drastic_menu.item[cc].y >= 240) && (drastic_menu.item[cc].y <= 376)) {
+            if ((drastic_menu.item[cc + 1].bg > 0) || (drastic_menu.item[cc + 2].bg > 0)) {
+                break;
+            }
+            cc+= 3;
+        }
+        else {
+            if (drastic_menu.item[cc].bg > 0) {
+                break;
+            }
+            cc+= 1;
+        }
+        cursor+= 1;
+    }
+    
+    if (cursor <= 6) {
+        s0 = 0;
+        s1 = 13;
+    }
+    else if (cursor >= (24 - 7)) {
+        s0 = 24 - 13;
+        s1 = 24;
+    }
+    else {
+        s0 = cursor - 6;
+        s1 = cursor + 7;
+    }
+
+    cnt = 0;
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        w = LINE_H / div;
+        p = &drastic_menu.item[cc];
+
+        if ((p->y == 224) || (p->y == 232) || (p->y == 201)) {
+            continue;
+        }
+
+        memset(buf, 0, sizeof(buf));
+        if ((cnt >= s0) && (cnt < s1)) {
+            y = (25 / div) + ((cnt - s0) * w);
+
+            if ((p->y >= 240) && (p->y <= 376)) {
+                if (drastic_menu.item[cc + 1].bg || drastic_menu.item[cc + 2].bg) {
+                    int sum = drastic_menu.item[cc + 1].bg + drastic_menu.item[cc + 2].bg;
+                    uint32_t c = sum > 500 ? 0xff0000 : nds.menu.c2;
+
+                    rt.x = 5 / div;
+                    rt.y = y - (3 / div);
+                    rt.w = FB_W - (10 / div);
+                    rt.h = w;
+                    SDL_FillRect(nds.menu.drastic.main, &rt, SDL_MapRGB(nds.menu.drastic.main->format, (c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff));
+                }
+                draw_info(nds.menu.drastic.main, p->msg, 20 / div, y, p->bg ? nds.menu.c0 : nds.menu.c1, 0);
+                if ((p->y >= 240) && (p->y <= 376)) {
+                        draw_info(nds.menu.drastic.main, to_lang(drastic_menu.item[cc + 1].msg), 300 / div, y, drastic_menu.item[cc + 1].bg ? nds.menu.c0 : nds.menu.c1, 0);
+                        draw_info(nds.menu.drastic.main, to_lang(drastic_menu.item[cc + 2].msg), 480 / div, y, drastic_menu.item[cc + 2].bg ? nds.menu.c0 : nds.menu.c1, 0);
+                }
+            }
+            else {
+                if (p->bg) {
+                    rt.x = 5 / div;
+                    rt.y = y - (3 / div);
+                    rt.w = FB_W - (10 / div);
+                    rt.h = w;
+                    SDL_FillRect(nds.menu.drastic.main, &rt, SDL_MapRGB(nds.menu.drastic.main->format, 
+                        (nds.menu.c2 >> 16) & 0xff, (nds.menu.c2 >> 8) & 0xff, nds.menu.c2 & 0xff));
+                }
+                draw_info(nds.menu.drastic.main, to_lang(p->msg), 20 / div, y, p->bg ? nds.menu.c0 : nds.menu.c1, 0);
+            }
+        }
+
+        cnt+= 1;
+        if ((p->y >= 240) && (p->y <= 376)) {
+            cc+= 2;
+        }
+    }
+    return 0;
+}
+static int draw_drastic_menu_option(void)
+{
+    int w = 0;
+    int y = 0;
+    int ww = 0;
+    int s0 = 0;
+    int s1 = 0;
+    int cc = 0;
+    int div = 1;
+    int cnt = 0;
+    int cursor = 0;
+    SDL_Rect rt = {0};
+    CUST_MENU_SUB *p = NULL;
+    char buf[MAX_PATH] = {0};
+
+    cursor = 0;
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        if (drastic_menu.item[cc].bg > 0) {
+            cursor = cc;
+        }
+    }
+
+    if (cursor <= 6) {
+        s0 = 1;
+        s1 = 14;
+    }
+    else if (cursor >= (drastic_menu.cnt - 7)) {
+        s0 = drastic_menu.cnt - 14;
+        s1 = drastic_menu.cnt - 1;
+    }
+    else {
+        s0 = cursor - 6;
+        s1 = cursor + 7;
+    }
+
+    for (cc=0; cc<drastic_menu.cnt; cc++) {
+        ww = LINE_H / div;
+
+        if ((cc >= s0) && (cc < s1)) {
+            y = (25 / div) + (cnt * ww);
+            memset(buf, 0, sizeof(buf));
+            p = &drastic_menu.item[cc];
+        
+            cnt+= 1;            
+            if (p->bg) {
+                rt.x = 5 / div;
+                rt.y = y - (3 / div);
+                rt.w = FB_W - (10 / div);
+                rt.h = ww;
+                SDL_FillRect(nds.menu.drastic.main, &rt, SDL_MapRGB(nds.menu.drastic.main->format, 
+                    (nds.menu.c2 >> 16) & 0xff, (nds.menu.c2 >> 8) & 0xff, nds.menu.c2 & 0xff));
+            }
+
+            if (p->y <= NDS_Hx2) {
+                strcpy(buf, to_lang(find_menu_string_tail(p->msg)));
+                w = get_font_width(buf);
+                draw_info(nds.menu.drastic.main, buf, FB_W - w - (ww / div), y, p->bg ? nds.menu.c0 : nds.menu.c1, 0);
+
+                mark_double_spaces(p->msg);
+                strcpy(buf, to_lang(p->msg));
+            }
+            else {
+                strcpy(buf, to_lang(p->msg));
+            }
+            draw_info(nds.menu.drastic.main, buf, ww / div, y, p->bg ? nds.menu.c0 : nds.menu.c1, 0);
+        }
+    }
+    return 0;
+}
+
+int process_drastic_menu(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Rect *dstrect)
+{
+    int layer = get_current_menu_layer();
+    SDL_FRect dstfrect;
+
+    if (!drastic_menu.cnt) {
+	    printf("Skip emtpy\n");
+	    return 0;
+    }
+
+    dstfrect.x = (float)dstrect->x;
+    dstfrect.y = (float)dstrect->y;
+    dstfrect.w = (float)dstrect->w;
+    dstfrect.h = (float)dstrect->h;
+
+    if (layer == NDS_DRASTIC_MENU_MAIN) {
+        SDL_SoftStretch(nds.menu.drastic.bg0, NULL, nds.menu.drastic.main, NULL);
+    }
+    else {
+        SDL_SoftStretch(nds.menu.drastic.bg1, NULL, nds.menu.drastic.main, NULL);
+    }
+
+    switch (layer) {
+    case NDS_DRASTIC_MENU_MAIN:
+        draw_drastic_menu_main();
+        break;
+    case NDS_DRASTIC_MENU_OPTION:
+        draw_drastic_menu_option();
+        break;
+    case NDS_DRASTIC_MENU_CONTROLLER:
+        draw_drastic_menu_controller();
+        break;
+    case NDS_DRASTIC_MENU_CONTROLLER2:
+        draw_drastic_menu_controller2();
+        break;
+    case NDS_DRASTIC_MENU_FIRMWARE:
+        draw_drastic_menu_firmware();
+        break;
+    case NDS_DRASTIC_MENU_CHEAT:
+        draw_drastic_menu_cheat();
+        break;
+    case NDS_DRASTIC_MENU_ROM:
+        draw_drastic_menu_rom();
+        break;
+    default:
+	break;
+    }
+
+    //printf("in the layer:%d\n", layer);
+    SDL_UpdateTexture(nds.menu.drastic.mtext, NULL, nds.menu.drastic.main->pixels, nds.menu.drastic.main->pitch);
+    if (SDL_RenderCopyF(renderer, nds.menu.drastic.mtext, NULL, &dstfrect))
+        printf("Render copy failed\n");
+
+    if (layer == NDS_DRASTIC_MENU_MAIN) {
+	    SDL_Rect ssrect;
+	    SDL_FRect dfrect;
+
+	    ssrect.x = 472;
+	    ssrect.y = 48;//48
+	    ssrect.w = 256;
+	    ssrect.h = 384;
+
+	    dfrect.x = 435.0 / 720.0 * dstfrect.w;//395
+	    dfrect.y = 100.0 / 720.0 * dstfrect.h;
+	    dfrect.w = 256;
+	    dfrect.h = 384;
+	    if (SDL_RenderCopyF(renderer, texture, &ssrect, &dfrect))
+	        printf("Render copy failed\n");
+    }
+
+    memset(&drastic_menu, 0, sizeof(drastic_menu));
+    return 0;
 }
 
 static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
@@ -3731,8 +5005,9 @@ static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
 	int offset_x = 0, offset_y = 0;
 
 	if (disp_mode == DISP_MODE_MENU) {
-		return SDL_RenderCopy_nds(renderer, texture,
-			&cur_res->menu_src_rect, &cur_res->menu_dst_rect);
+		return process_drastic_menu(renderer, texture, &cur_res->menu_dst_rect);
+/*		return SDL_RenderCopy_nds(renderer, texture,
+			&cur_res->menu_src_rect, &cur_res->menu_dst_rect);*/
 	} else if (disp_mode == DISP_MODE_H_SINGLE) {
 		if (nds_tex_is_pointer(texture)) {
 			scale = cur_res->pointer_scale[0];
@@ -3766,6 +5041,8 @@ static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
 		dstfrect.h = (float) dstrect->h * scale;
 		return SDL_RenderCopyF(renderer, texture, srcrect,  &dstfrect);
 	}
+//	printf("tex:%p, %d, %d, dst: %d, %d, %d, %d\n", texture, texture->w, texture->h, 
+//		dstrect->x, dstrect->y, dstrect->w, dstrect->h);
 
 	rect_idx = nds_pointer_in_first_screen(dstrect) ? 0 : 1;
 	ret = SDL_RenderCopy_nds(renderer, texture,  srcrect, &cur_res->tgt_rect[rect_idx]);
