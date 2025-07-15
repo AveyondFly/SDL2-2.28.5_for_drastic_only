@@ -32,6 +32,8 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <FreeImage.h>
+#include <unistd.h>
+#include <libgen.h>
 
 #if defined(__ANDROID__)
 #include "../core/android/SDL_android.h"
@@ -39,7 +41,7 @@
 
 #include <sys/mman.h>
 #include <SDL2/SDL_ttf.h>
-#include <unistd.h>
+#include <SDL2/SDL_image.h>
 
 /* as a courtesy to iOS apps, we don't try to draw when in the background, as
 that will crash the app. However, these apps _should_ have used
@@ -138,8 +140,7 @@ static const SDL_RenderDriver *render_drivers[] = {
 };
 #endif /* !SDL_RENDER_DISABLED */
 
-#define FONT_PATH                   "/storage/.config/drastic_chn/resources/font/font.ttf"
-#define NDS_VER                     "v1.9"
+#define NDS_VER                     "v2.01"
 #define NDS_W                       256
 #define NDS_H                       192
 #define NDS_Wx2                     (NDS_W * 2)
@@ -184,7 +185,7 @@ enum nds_target_disp_mode {
 
 enum nds_target_disp_res {
 	DISP_RES_720_720,	/* 720x720. Used by RGB30/20SX. */
-//	DISP_RES_640_480,	/* 640x480. */
+	DISP_RES_640_480,	/* 640x480. */
 	DISP_RES_720P,		/* 1280x720. */
 	DISP_RES_1080P,		/* 1920x1080. */
 	/* Not intrested for now. */
@@ -284,7 +285,7 @@ typedef struct _NDS {
 NDS nds = {0};
 static SDL_Surface *cvt = NULL;
 
-#define NDS_BEZELS "/storage/roms/bezels/nds/"
+#define NDS_BEZELS "/roms/bezels/nds/"
 
 static char *nds_bg_png[DISP_TGT_MODE_MAX] = {
 	[DISP_TGT_MODE_TOP_FULL] = "bg_vertical_full.png",
@@ -342,6 +343,45 @@ static struct nds_disp_resize disp_rgb30[DISP_TGT_MODE_MAX] = {
 		.tgt_rect = {
 			{0, 0, 800, 480},
 			{0, 0, 720, 720},
+		},
+	},
+};
+
+static struct nds_disp_resize disp_768p[DISP_TGT_MODE_MAX] = {
+	[DISP_TGT_MODE_2DS] = {
+		.tgt_rect = {
+			{0, 0, 1024, 768},
+			{0, 0, 384, 288},
+		},
+	},
+	[DISP_TGT_MODE_V_ORI] = {
+		.tgt_rect = {
+			{256, 0, 512, 374},
+			{256, 374, 512, 374},
+		},
+	},
+	[DISP_TGT_MODE_TOP_FULL] = {
+		.tgt_rect = {
+			{0, 96, 768, 576},
+			{768, 288, 256, 192},
+		},
+	},
+	[DISP_TGT_MODE_TOP_CONN_BOTTOM] = {
+		.tgt_rect = {
+			{0, 0, 1024, 768},
+			{0, 0, 384, 288},
+		},
+	},
+	[DISP_TGT_MODE_H_SINGLE] = {
+		.tgt_rect = {
+			{0, 0, 1024, 768},
+			{0, 0, 0, 0},
+		},
+	},
+	[DISP_TGT_MODE_MENU] = {
+		.tgt_rect = {
+			{0, 0, 800, 480},
+			{0, 0, 1024, 768},
 		},
 	},
 };
@@ -424,7 +464,6 @@ static struct nds_disp_resize disp_1080p[DISP_TGT_MODE_MAX] = {
 	},
 };
 
-#if 0
 static struct nds_disp_resize disp_480p[DISP_TGT_MODE_MAX] = {
 	[DISP_TGT_MODE_2DS] = {
 		.tgt_rect = {
@@ -463,7 +502,123 @@ static struct nds_disp_resize disp_480p[DISP_TGT_MODE_MAX] = {
 		},
 	},
 };
-#endif
+
+static struct nds_disp_resize disp_480px[DISP_TGT_MODE_MAX] = {
+	[DISP_TGT_MODE_2DS] = {
+		.tgt_rect = {
+			{0, 0, 640, 480},
+			{640, 136, 208, 156},
+		},
+	},
+	[DISP_TGT_MODE_V_ORI] = {
+		.tgt_rect = {
+			{267, 0, 320, 240},
+			{267, 240, 320, 240},
+		},
+	},
+	[DISP_TGT_MODE_TOP_FULL] = {
+		.tgt_rect = {
+			{0, 0, 640, 480},
+			{640, 136, 208, 156},
+		},
+	},
+	[DISP_TGT_MODE_TOP_CONN_BOTTOM] = {
+		.tgt_rect = {
+			{0, 0, 640, 480},
+			{640, 136, 208, 156},
+		},
+	},
+	[DISP_TGT_MODE_H_SINGLE] = {
+		.tgt_rect = {
+			{0, 0, 640, 480},
+			{0, 0, 0, 0},
+		},
+	},
+	[DISP_TGT_MODE_MENU] = {
+		.tgt_rect = {
+			{0, 0, 800, 480},
+			{0, 0, 800, 480},
+		},
+	},
+};
+
+static struct nds_disp_resize disp_480ps[DISP_TGT_MODE_MAX] = {
+	[DISP_TGT_MODE_2DS] = {
+		.tgt_rect = {
+			{0, 0, 640, 480},
+			{640, 160, 160, 120},
+		},
+	},
+	[DISP_TGT_MODE_V_ORI] = {
+		.tgt_rect = {
+			{240, 0, 320, 240},
+			{240, 240, 320, 240},
+		},
+	},
+	[DISP_TGT_MODE_TOP_FULL] = {
+		.tgt_rect = {
+			{0, 0, 640, 480},
+			{640, 160, 160, 120},
+		},
+	},
+	[DISP_TGT_MODE_TOP_CONN_BOTTOM] = {
+		.tgt_rect = {
+			{0, 30, 560, 420},
+			{560, 150, 240, 180},
+		},
+	},
+	[DISP_TGT_MODE_H_SINGLE] = {
+		.tgt_rect = {
+			{80, 0, 640, 480},
+			{0, 0, 0, 0},
+		},
+	},
+	[DISP_TGT_MODE_MENU] = {
+		.tgt_rect = {
+			{0, 0, 800, 480},
+			{0, 0, 800, 480},
+		},
+	},
+};
+
+static struct nds_disp_resize disp_320p[DISP_TGT_MODE_MAX] = {
+	[DISP_TGT_MODE_2DS] = {
+		.tgt_rect = {
+			{0, 40, 320, 240},
+			{320, 100, 160, 120},
+		},
+	},
+	[DISP_TGT_MODE_V_ORI] = {
+		.tgt_rect = {
+			{0, 40, 320, 240},
+			{320, 100, 160, 120},
+		},
+	},
+	[DISP_TGT_MODE_TOP_FULL] = {
+		.tgt_rect = {
+			{70, 0, 342, 256},
+			{196, 256, 86, 64},
+		},
+	},
+	[DISP_TGT_MODE_TOP_CONN_BOTTOM] = {
+		.tgt_rect = {
+			{0, 40, 320, 240},
+			{320, 100, 160, 120},
+		},
+	},
+	[DISP_TGT_MODE_H_SINGLE] = {
+		.tgt_rect = {
+			{26, 0, 426, 320},
+			{0, 0, 0, 0},
+		},
+	},
+	[DISP_TGT_MODE_MENU] = {
+		.tgt_rect = {
+			{0, 0, 800, 480},
+			{0, 0, 480, 320},
+		},
+	},
+};
 
 static struct nds_disp_resize nds_disp_resize_used[DISP_MODE_MAX];
 struct nds_disp_resize *res_sel = NULL;
@@ -568,10 +723,9 @@ static int lang_load(const char *lang)
     return 0;
 }
 
-int reload_menu(void)
+int reload_menu(char *folder)
 {
     SDL_Surface *t = NULL;
-    char *folder = "/storage/.config/drastic_chn";
     char buf[MAX_PATH << 1] = {0};
 
     cvt = SDL_CreateRGBSurface(SDL_SWSURFACE, FB_W, FB_H, 32, 0, 0, 0, 0);
@@ -637,6 +791,54 @@ int reload_menu(void)
     return 0;
 }
 
+static char* get_linux_executable_path(char *buffer, size_t buf_size) {
+    // 通过读取 /proc/self/exe 获取当前进程的完整路径
+    ssize_t len = readlink("/proc/self/exe", buffer, buf_size - 1);
+    
+    if (len == -1) {
+        perror("readlink failed");
+        return NULL;
+    }
+    
+    buffer[len] = '\0';  // 确保字符串终止
+    
+    // 提取目录部分（不修改原始缓冲区）
+    char *dir_buffer = malloc(buf_size);
+    if (!dir_buffer) {
+        perror("malloc failed");
+        return NULL;
+    }
+    
+    strncpy(dir_buffer, buffer, len);
+    dir_buffer[len] = '\0';
+    
+    char *dir = dirname(dir_buffer);  // 安全提取目录
+    strncpy(buffer, dir, buf_size);
+    
+    free(dir_buffer);
+    return buffer;
+}
+
+static char* get_system_language() {
+    // 按优先级检查环境变量
+    const char *vars[] = {"LC_ALL", "LC_MESSAGES", "LANG", NULL};
+    char *lang = NULL;
+
+    for (int i = 0; vars[i]; ++i) {
+        lang = getenv(vars[i]);
+        if (lang && *lang) break; // 找到有效值
+    }
+
+    if (!lang) return strdup("C"); // 默认 POSIX  locale
+
+    // 提取语言代码（如 "en" 或 "zh"）
+    char *result = strdup(lang);
+    char *underscore = strchr(result, '.');
+    if (underscore) *underscore = '\0'; // 截断到第一个下划线
+
+    return result;
+}
+
 static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 {
 	int displayIndex;
@@ -644,6 +846,9 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 	SDL_Rect rect;
 	char texpath[PATH_MAX];
 	int i;
+    	char buf[MAX_PATH << 1] = {0};
+    	char folder[MAX_PATH] = {0};
+	char *lang = get_system_language();
 
     LINE_H = 30;
     FONT_SIZE = DEF_FONT_SIZE;
@@ -666,15 +871,30 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 		printf("Create main test failed\n");
 	}
 
+	if (!get_linux_executable_path(folder, sizeof(folder))) {
+		printf("Get folder failed\n");
+		exit(1);
+	}
+
+	sprintf(buf, "%s/%s", folder, "resources/font/font.ttf");
 	TTF_Init();
-	nds.font = TTF_OpenFont(FONT_PATH, FONT_SIZE);
+	nds.font = TTF_OpenFont(buf, FONT_SIZE);
 	if (!nds.font) {
 		printf("Open font failed\n");
 	}
 
-	reload_menu();
-
-	lang_load("/storage/.config/drastic_chn/resources/lang/chinese_cn");
+	reload_menu(folder);
+	if (strstr(lang, "zh_CN"))
+		sprintf(buf, "%s/%s", folder, "resources/lang/chinese_cn");
+	else if (strstr(lang, "zh_TW"))
+		sprintf(buf, "%s/%s", folder, "resources/lang/chinese_tw");
+	else if (strstr(lang, "de"))
+		sprintf(buf, "%s/%s", folder, "resources/lang/german_deu");
+	else if (strstr(lang, "es"))
+		sprintf(buf, "%s/%s", folder, "resources/lang/spanish_sp");
+	else
+		memset(buf, 0, sizeof(buf));
+	lang_load(buf);
 
 	displayIndex = SDL_GetWindowDisplayIndex(window);
 	if (displayIndex < 0) {
@@ -693,8 +913,16 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 		res_sel = disp_720p;
 	else if (rect.w == 1920 && rect.h == 1080)
 		res_sel = disp_1080p;
-	//else if (rect.w == 640 && rect.h == 480)
-	//	res_sel = disp_480p;
+	else if (rect.w == 1024 && rect.h == 768)
+		res_sel = disp_768p;
+	else if (rect.w == 640 && rect.h == 480)
+		res_sel = disp_480p;
+	else if (rect.w == 854 && rect.h == 480)
+		res_sel = disp_480px;
+	else if (rect.w == 800 && rect.h == 480)
+		res_sel = disp_480ps;
+	else if (rect.w == 480 && rect.h == 320)
+		res_sel = disp_320p;
 
 	if (!res_sel) {
 		printf("Unsupported output resolution.\n");
@@ -711,6 +939,7 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 	/* First initialize the layouts with first 2 layouts. */
 	nds_disp_resize_used[DISP_MODE_H] = res_sel[DISP_TGT_MODE_TOP_FULL];
 	nds_disp_resize_used[DISP_MODE_V] = res_sel[DISP_TGT_MODE_V_ORI];
+	nds_disp_resize_used[DISP_MODE_H_SINGLE] = res_sel[DISP_TGT_MODE_H_SINGLE];
 	nds_disp_resize_used[DISP_MODE_H_SINGLE] = res_sel[DISP_TGT_MODE_H_SINGLE];
 	nds_disp_resize_used[DISP_MODE_MENU] = res_sel[DISP_TGT_MODE_MENU];
 
@@ -748,19 +977,18 @@ static void nds_drastic_update_disp_mode(SDL_Renderer *renderer, int w, int h)
 {
 	if (h == 192 && w == 512)
 		disp_mode = DISP_MODE_H;
-	else if (h == 480 && w == 800)
+	else if (h == 480 && w == 800 && res_sel != disp_480ps)
 		disp_mode = DISP_MODE_MENU;
 	else if (h == 384 && w == 256)
 		disp_mode = DISP_MODE_V;
 	else if (h == 192 && w == 256)
 		disp_mode = DISP_MODE_H_SINGLE;
 
-	if (disp_mode != DISP_MODE_MAX &&
-		disp_rect.w &&
-		disp_rect.h) {
+	if (res_sel) {
 		renderer->logical_w = disp_rect.w;
 		renderer->logical_h = disp_rect.h;
 	}
+	system("swaymsg [app_id='drastic'] fullscreen enable");
 }
 
 static SDL_INLINE void DebugLogRenderCommands(const SDL_RenderCommand *cmd)
@@ -1571,6 +1799,8 @@ void sdl_print_string(char *p, uint32_t fg, uint32_t bg, uint32_t x, uint32_t y)
     SDL_Surface *t1 = NULL;
     static int fps_cnt = 0;
 
+    if (res_sel == disp_480ps)
+	    disp_mode = DISP_MODE_MENU;
     if (p && (strlen(p) > 0)) {
         if (drastic_menu.cnt < MAX_MENU_LINE) {
             drastic_menu.item[drastic_menu.cnt].x = x;
@@ -2436,8 +2666,6 @@ int SDL_UpdateTexture(SDL_Texture *texture, const SDL_Rect *rect,
 {
     SDL_Rect real_rect;
 
-//    if (disp_mode == DISP_MODE_MENU)
-//	    return 0;
     CHECK_TEXTURE_MAGIC(texture, -1);
 
     if (pixels == NULL) {
@@ -3092,7 +3320,7 @@ int SDL_RenderSetLogicalSize(SDL_Renderer *renderer, int w, int h)
     renderer->logical_w = w;
     renderer->logical_h = h;
 
-    nds_drastic_update_disp_mode(renderer, w, h);
+	nds_drastic_update_disp_mode(renderer, w, h);
 
     return UpdateLogicalSize(renderer, SDL_TRUE);
 }
@@ -4075,7 +4303,7 @@ static inline int SDL_RenderCopy_nds(SDL_Renderer *renderer, SDL_Texture *textur
 
 static inline bool nds_tex_is_pointer(const SDL_Texture *texture)
 {
-	return (texture->w == 32 && texture->h == 64);
+	return (texture->w == 32 && texture->h == 32);
 }
 
 static inline bool nds_pointer_in_first_screen(const SDL_Rect *dstrect)
@@ -4163,8 +4391,8 @@ static int get_current_menu_layer(void)
     const char *P3 = "Enter Menu";
     const char *P4 = "Username";
     //const char *P5 = "KB Space: toggle cheat/folder    KB Left Ctrl: return to main menu";
-    //const char *P5 = "JS0 Button 01: toggle cheat/folder    JS0 Button 00: return to main menu";
-    const char *P5 = "Unmapped: toggle cheat/folder    Unmapped: return to main menu";
+    const char *P50 = "toggle cheat/folder";
+    const char *P51 = "return to main menu";
     const char *P6 = "KB Space: select";
 
     for (cc=0; cc<drastic_menu.cnt; cc++) {
@@ -4183,7 +4411,7 @@ static int get_current_menu_layer(void)
         else if (!memcmp(drastic_menu.item[cc].msg, P4, strlen(P4))) {
             return NDS_DRASTIC_MENU_FIRMWARE;
         }
-        else if (!memcmp(drastic_menu.item[cc].msg, P5, strlen(P5))) {
+        else if (strstr(drastic_menu.item[cc].msg, P50) || strstr(drastic_menu.item[cc].msg, P51)) {
             return NDS_DRASTIC_MENU_CHEAT;
         }
         else if (!memcmp(drastic_menu.item[cc].msg, P6, strlen(P6))) {
@@ -4311,7 +4539,7 @@ static int draw_drastic_menu_main(void)
     }
 
     y = 10;
-    sprintf(buf, "Port from miyoo by kk");
+    sprintf(buf, "Rel "NDS_VER", from %s", "Miyoo by KK");
     draw_info(nds.menu.drastic.main, buf, 10, y / div, nds.menu.c1, 0);
 #if 0
     if (draw_shot) {
@@ -4925,6 +5153,7 @@ int process_drastic_menu(SDL_Renderer *renderer, SDL_Texture *texture, const SDL
     int layer = get_current_menu_layer();
     SDL_FRect dstfrect;
 
+
     if (!drastic_menu.cnt) {
 	    printf("Skip emtpy\n");
 	    return 0;
@@ -4970,7 +5199,7 @@ int process_drastic_menu(SDL_Renderer *renderer, SDL_Texture *texture, const SDL
 
     //printf("in the layer:%d\n", layer);
     SDL_UpdateTexture(nds.menu.drastic.mtext, NULL, nds.menu.drastic.main->pixels, nds.menu.drastic.main->pitch);
-    if (SDL_RenderCopyF(renderer, nds.menu.drastic.mtext, NULL, &dstfrect))
+    if (SDL_RenderCopyF(renderer, nds.menu.drastic.mtext, NULL,&dstfrect))
         printf("Render copy failed\n");
 
     if (layer == NDS_DRASTIC_MENU_MAIN) {
@@ -4982,10 +5211,15 @@ int process_drastic_menu(SDL_Renderer *renderer, SDL_Texture *texture, const SDL
 	    ssrect.w = 256;
 	    ssrect.h = 384;
 
-	    dfrect.x = 435.0 / 720.0 * dstfrect.w;//395
-	    dfrect.y = 100.0 / 720.0 * dstfrect.h;
-	    dfrect.w = 256;
-	    dfrect.h = 384;
+	    dfrect.x = 360.0 / 640.0 * dstfrect.w;//395
+	    dfrect.y = 50.0 / 480.0 * dstfrect.h;
+	    if (res_sel == disp_320p) {
+		    dfrect.w = 256/4;
+		    dfrect.h = 384/4;
+	    } else {
+		    dfrect.w = 256;
+		    dfrect.h = 384;
+	    }
 	    if (SDL_RenderCopyF(renderer, texture, &ssrect, &dfrect))
 	        printf("Render copy failed\n");
     }
@@ -5041,8 +5275,6 @@ static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
 		dstfrect.h = (float) dstrect->h * scale;
 		return SDL_RenderCopyF(renderer, texture, srcrect,  &dstfrect);
 	}
-//	printf("tex:%p, %d, %d, dst: %d, %d, %d, %d\n", texture, texture->w, texture->h, 
-//		dstrect->x, dstrect->y, dstrect->w, dstrect->h);
 
 	rect_idx = nds_pointer_in_first_screen(dstrect) ? 0 : 1;
 	ret = SDL_RenderCopy_nds(renderer, texture,  srcrect, &cur_res->tgt_rect[rect_idx]);

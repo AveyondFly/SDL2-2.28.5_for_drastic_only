@@ -431,7 +431,7 @@ void detour_hook(uint32_t old_func, uint32_t new_func)
 {
     volatile uint8_t *base = (uint8_t *)(intptr_t)old_func;
 
-    mprotect(ALIGN_ADDR(base), sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE);
+    mprotect(ALIGN_ADDR(base), sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE | PROT_EXEC);
     base[0] = 0x04;
     base[1] = 0xf0;
     base[2] = 0x1f;
@@ -453,9 +453,204 @@ void sdl_update_screen(void)
 {
 }
 
-#define FUN_PRINT_STRING 0x080a5398
+//#define FUN_PRINT_STRING 0x080a5398
 #define FUN_BLIT_SCREEN_MENU 0x080a62d8
 #define FUN_UPDATE_SCREEN 0x080a83c0
+uint64_t base_addr=0;
+uint64_t base_addr_r=0;
+uint64_t base_addr_rx=0;
+uint64_t base_addr_rw=0;
+#define FUN_PRINT_STRING            (base_addr_rx + 0x00097c30)
+
+void detour_hook_64(uint64_t old_func, uint64_t new_func)
+{
+    int i;
+    
+    volatile uint8_t *base = (uint8_t *)(intptr_t)(/*base_addr_rx + */old_func);
+    //printf(PREFIX"detour_hook++: old_func=0x%lx\n", base);
+    //printf(PREFIX"detour_hook++: new_func=0x%lx\n", new_func);
+    mprotect(ALIGN_ADDR(base), 4096, PROT_READ | PROT_WRITE | PROT_EXEC);
+
+    for(i=0; i<16; i++) {
+    	printf("0x%x,", base[i]);
+    }
+    
+/*
+
+// for armhf
+    base[0] = 0x04;
+    base[1] = 0xf0;
+    base[2] = 0x1f;
+    base[3] = 0xe5;
+    base[4] = new_func >> 0;
+    base[5] = new_func >> 8;
+    base[6] = new_func >> 16;
+    base[7] = new_func >> 24;
+	*/
+	
+	//for aarch64
+	/*
+    400078: 58000049 ldr x9, 400080 <_start+0x8>
+    40007c: d61f0120 br x9
+    400080: 55667788 .word 0x55667788
+    400084: 11223344 .word 0x11223344
+  	*/
+  	/*
+    base[0] = 0x70;
+    base[1] = 0x00;
+    base[2] = 0x00;
+    base[3] = 0x10;
+    base[4] = 0x11;
+    base[5] = 0x02;
+    base[6] = 0x40;
+    base[7] = 0xf9;
+    base[8] = 0x20;
+    base[9] = 0x02;
+    base[10] = 0x1f;
+    base[11] = 0xd6;
+
+ */
+/*
+    memcpy(base, "\xe1\x03\xbe\xa9\x40\x00\x00\x58\x00\x00\x1f\xd6\x00\x00\x00\x00"
+		"\x00\x00\x00\x00\xe1\x03\xc2\xa8", 24);
+    //memcpy(base + 12, new_func, 8);
+    base[12] = new_func >> 0;
+    base[13] = new_func >> 8;
+    base[14] = new_func >> 16;
+    base[15] = new_func >> 24;
+    base[16] = new_func >> 32;
+    base[17] = new_func >> 40;
+    base[18] = new_func >> 48;
+    base[19] = new_func >> 56;  
+    */
+    //base[0] = 0x40; // x0 : 1st parameter of function is corrupted
+    base[0] = 0x51; // x17
+    //base[0] = 0x47;
+    //base[0] = 0x48; // x8
+    //base[0] = 0x49; // x9
+    base[1] = 0x00;
+    base[2] = 0x00;
+    base[3] = 0x58;
+    //base[4] = 0x00; // x0
+    //base[5] = 0x00; // x0
+    
+    base[4] = 0x20; // x17
+    base[5] = 0x02; // x17
+         
+    base[6] = 0x1f;
+    base[7] = 0xd6;
+    base[8] = new_func >> 0;
+    base[9] = new_func >> 8;
+    base[10] = new_func >> 16;
+    base[11] = new_func >> 24;
+    base[12] = new_func >> 32;
+    base[13] = new_func >> 40;
+    base[14] = new_func >> 48;
+    base[15] = new_func >> 56;
+    //printf(PREFIX"detour_hook--\n");
+}
+
+void _pmparser_split_line(
+		char*buf,char*addr1,char*addr2,
+		char*perm,char* offset,char* device,char*inode,
+		char* pathname){
+	//
+	int orig=0;
+	int i=0;
+	//addr1
+	while(buf[i]!='-'){
+		addr1[i-orig]=buf[i];
+		i++;
+	}
+	addr1[i]='\0';
+	i++;
+	//addr2
+	orig=i;
+	while(buf[i]!='\t' && buf[i]!=' '){
+		addr2[i-orig]=buf[i];
+		i++;
+	}
+	addr2[i-orig]='\0';
+
+	//perm
+	while(buf[i]=='\t' || buf[i]==' ')
+		i++;
+	orig=i;
+	while(buf[i]!='\t' && buf[i]!=' '){
+		perm[i-orig]=buf[i];
+		i++;
+	}
+	perm[i-orig]='\0';
+	//offset
+	while(buf[i]=='\t' || buf[i]==' ')
+		i++;
+	orig=i;
+	while(buf[i]!='\t' && buf[i]!=' '){
+		offset[i-orig]=buf[i];
+		i++;
+	}
+	offset[i-orig]='\0';
+	//dev
+	while(buf[i]=='\t' || buf[i]==' ')
+		i++;
+	orig=i;
+	while(buf[i]!='\t' && buf[i]!=' '){
+		device[i-orig]=buf[i];
+		i++;
+	}
+	device[i-orig]='\0';
+	//inode
+	while(buf[i]=='\t' || buf[i]==' ')
+		i++;
+	orig=i;
+	while(buf[i]!='\t' && buf[i]!=' '){
+		inode[i-orig]=buf[i];
+		i++;
+	}
+	inode[i-orig]='\0';
+	//pathname
+	pathname[0]='\0';
+	while(buf[i]=='\t' || buf[i]==' ')
+		i++;
+	orig=i;
+	while(buf[i]!='\t' && buf[i]!=' ' && buf[i]!='\n'){
+		pathname[i-orig]=buf[i];
+		i++;
+	}
+	pathname[i-orig]='\0';
+
+}
+
+void detour_init()
+{
+    char addr1[20],addr2[20], perm[8], offset[20], dev[10],inode[30],pathname[4096];
+    FILE* fp;
+
+    fp=fopen("/proc/self/maps", "r");
+    if (fp != NULL) {
+    	char buf[200];
+    	while (fgets(buf, 200, fp) != NULL) {
+    		//printf("%s", buf);
+    		_pmparser_split_line(buf, addr1, addr2, perm, offset, dev, inode, pathname);
+    		if (strcmp(basename(pathname), "drastic") == 0) {
+    			printf("%s, %s, %s, %s, %s, %s, %s\n", addr1, addr2, perm, offset, dev, inode, pathname);
+    			
+    			base_addr = (uint64_t)strtol(addr1, NULL, 16);
+    			if (strcmp(perm, "r-xp") == 0)
+    				base_addr_rx = base_addr; // - 0xd100;
+    			else if (strcmp(perm, "r--p") == 0)
+    				base_addr_r = base_addr;
+    			else if (strcmp(perm, "rw-p") == 0)
+    				base_addr_rw = base_addr - 0x15b000;
+    			printf("base_addr = 0x%lx\n", base_addr);
+    		}
+    	}
+    	fclose(fp);
+    	printf("base_addr_rx = 0x%lx\n", base_addr_rx);
+    	printf("base_addr_r = 0x%lx\n", base_addr_r);
+    	printf("base_addr_rw = 0x%lx\n", base_addr_rw);
+    }
+}
 
 /*
  * Initialize the video and event subsystems -- determine native pixel format
@@ -583,7 +778,8 @@ int SDL_VideoInit(const char *driver_name)
         SDL_StartTextInput();
     }
 
-    detour_hook(FUN_PRINT_STRING, (intptr_t)sdl_print_string);
+    detour_init();
+    detour_hook_64(FUN_PRINT_STRING, (intptr_t)sdl_print_string);
     //detour_hook(FUN_BLIT_SCREEN_MENU, (intptr_t)sdl_blit_screen_menu);
     //detour_hook(FUN_UPDATE_SCREEN, (intptr_t)sdl_update_screen);
 
