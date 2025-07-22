@@ -590,20 +590,20 @@ static struct nds_disp_resize disp_320p[DISP_TGT_MODE_MAX] = {
 	},
 	[DISP_TGT_MODE_V_ORI] = {
 		.tgt_rect = {
-			{0, 40, 320, 240},
-			{320, 100, 160, 120},
+			{136, 0, 208, 156},
+			{136, 164, 208, 156},
 		},
 	},
 	[DISP_TGT_MODE_TOP_FULL] = {
 		.tgt_rect = {
-			{70, 0, 342, 256},
-			{196, 256, 86, 64},
+			{0, 40, 320, 240},
+			{320, 100, 160, 120},
 		},
 	},
 	[DISP_TGT_MODE_TOP_CONN_BOTTOM] = {
 		.tgt_rect = {
-			{0, 40, 320, 240},
-			{320, 100, 160, 120},
+			{70, 0, 342, 256},
+			{196, 256, 86, 64},
 		},
 	},
 	[DISP_TGT_MODE_H_SINGLE] = {
