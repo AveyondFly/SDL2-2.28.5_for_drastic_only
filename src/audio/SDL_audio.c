@@ -791,7 +791,7 @@ static int SDLCALL SDL_RunAudio(void *userdata)
     }
 
     /* Wait for the audio to drain. */
-    SDL_Delay(((device->spec.samples * 1000) / device->spec.freq) * 2);
+//    SDL_Delay(((device->spec.samples * 1000) / device->spec.freq) * 2);
 
     current_audio.impl.ThreadDeinit(device);
 

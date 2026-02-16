@@ -109,6 +109,13 @@ void KMSDRM_CreateCursorBO(SDL_VideoDisplay *display)
                                                dispdata->cursor_w, dispdata->cursor_h,
                                                GBM_FORMAT_ARGB8888, GBM_BO_USE_CURSOR | GBM_BO_USE_WRITE | GBM_BO_USE_LINEAR);
 
+    // GBM_BO_USE_LINEAR not supported on mali... retry when this fails.
+    if (!dispdata->cursor_bo) {
+        dispdata->cursor_bo = KMSDRM_gbm_bo_create(viddata->gbm_dev,
+                                        dispdata->cursor_w, dispdata->cursor_h,
+                                        GBM_FORMAT_ARGB8888, GBM_BO_USE_CURSOR | GBM_BO_USE_WRITE);
+    }
+
     if (!dispdata->cursor_bo) {
         SDL_SetError("Could not create GBM cursor BO");
         return;
