@@ -20,7 +20,7 @@ if (HAIKU)
 endif()
 
 set(EXTRA_LIBS)
-set(EXTRA_LDFLAGS)
+set(EXTRA_LDFLAGS "-ludev -lSDL2_image -lSDL2_ttf -ljson-c -lpthread -lEGL -lGLESv2 -ldrm -lgbm")
 
 set(CMAKE_LIBS)
 set(PKGCONFIG_LDFLAGS)

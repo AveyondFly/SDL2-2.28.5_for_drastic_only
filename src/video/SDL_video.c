@@ -1,3 +1,4 @@
+#include "drastic_video.h" // by trngaje
 /*
   Simple DirectMedia Layer
   Copyright (C) 1997-2025 Sam Lantinga <slouken@libsdl.org>
@@ -463,6 +464,10 @@ int SDL_VideoInit(const char *driver_name)
     if (_this) {
         SDL_VideoQuit();
     }
+    /* trngaje */
+    //printf("[trngaje] SDL_VideoInit:%s", driver_name);
+    //drastic_VideoInit();
+
 
 #ifndef SDL_TIMERS_DISABLED
     SDL_TicksInit();
@@ -601,6 +606,10 @@ int SDL_VideoInit(const char *driver_name)
 #endif /* !SDL_VIDEO_DRIVER_N3DS && !SDL_VIDEO_DRIVER_PSP */
 
     SDL_MousePostInit();
+
+    /* trngaje */
+    printf("[trngaje] SDL_VideoInit:%s", driver_name);
+    drastic_VideoInit();
 
     /* We're ready to go! */
     return 0;
@@ -3442,6 +3451,8 @@ void SDL_VideoQuit(void)
         return;
     }
 
+    drastic_VideoQuit(); // by trngaje
+    
     /* Halt event processing before doing anything else */
     SDL_TouchQuit();
     SDL_MouseQuit();
