@@ -357,26 +357,26 @@ static struct nds_disp_resize disp_rgb30[DISP_TGT_MODE_MAX] = {
 static struct nds_disp_resize disp_768p[DISP_TGT_MODE_MAX] = {
 	[DISP_TGT_MODE_2DS] = {
 		.tgt_rect = {
-			{0, 0, 1024, 768},
-			{0, 0, 384, 288},
+			{0, 0, 768, 576},
+			{768, 576, 256, 192},
 		},
 	},
 	[DISP_TGT_MODE_V_ORI] = {
 		.tgt_rect = {
-			{256, 0, 512, 374},
-			{256, 374, 512, 374},
+			{256, 0, 512, 384},
+			{256, 378, 512, 384},
 		},
 	},
 	[DISP_TGT_MODE_TOP_FULL] = {
 		.tgt_rect = {
-			{0, 96, 768, 576},
-			{768, 288, 256, 192},
+			{128, 0, 768, 576},
+			{384, 576, 256, 192},
 		},
 	},
 	[DISP_TGT_MODE_TOP_CONN_BOTTOM] = {
 		.tgt_rect = {
-			{0, 0, 1024, 768},
-			{0, 0, 384, 288},
+			{0, 0, 768, 576},
+			{768, 576, 256, 192},
 		},
 	},
 	[DISP_TGT_MODE_H_SINGLE] = {
@@ -586,6 +586,51 @@ static struct nds_disp_resize disp_480ps[DISP_TGT_MODE_MAX] = {
 			{0, 0, 800, 480},
 		},
 	},
+};
+
+static struct nds_disp_resize disp_960x720[DISP_TGT_MODE_MAX] = {
+        [DISP_TGT_MODE_2DS] = {
+                .tgt_rect = {
+            // 上屏2倍，下屏1.5倍
+                        {215, 0, 512, 384},
+                        {279, 431, 384, 288},
+                },
+        },
+        [DISP_TGT_MODE_V_ORI] = {
+                .tgt_rect = {
+            // 上下都是1.8725倍
+                        {240, 0, 480, 360},
+                        {240, 360, 480, 360},
+                },
+        },
+        [DISP_TGT_MODE_TOP_FULL] = {
+                .tgt_rect = {
+             // 上屏3倍，下屏0.75倍
+                        {96, 0, 768, 576},
+                        {384, 576, 192, 144},
+                },
+        },
+        [DISP_TGT_MODE_TOP_CONN_BOTTOM] = {
+                .tgt_rect = {
+             // 上屏2.75倍，下屏1倍
+                        {128, 0, 704, 528},
+                        {352, 528, 256, 192},
+                },
+        },
+        [DISP_TGT_MODE_H_SINGLE] = {
+                .tgt_rect = {
+            // 单屏3.75倍最大
+                        {0, 0, 960, 720},
+                        {0, 0, 0, 0},
+                },
+        },
+        [DISP_TGT_MODE_MENU] = {
+                .tgt_rect = {
+            // 菜单
+                        {0, 0, 800, 480},
+                        {0, 0, 960, 720},
+                },
+        },
 };
 
 static struct nds_disp_resize disp_320p[DISP_TGT_MODE_MAX] = {
@@ -930,6 +975,8 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 		res_sel = disp_480ps;
 	else if (rect.w == 480 && rect.h == 320)
 		res_sel = disp_320p;
+	else if (rect.w == 960 && rect.h == 720)
+		res_sel = disp_960x720;
 
 	if (!res_sel) {
 		printf("Unsupported output resolution.\n");
