@@ -25,6 +25,7 @@
 #include "SDL_hints.h"
 #include "SDL_render.h"
 #include "SDL_timer.h"
+#include "SDL_keyboard.h"
 #include "SDL_sysrender.h"
 #include "software/SDL_render_sw_c.h"
 #include "../video/SDL_pixels_c.h"
@@ -369,7 +370,7 @@ static struct nds_disp_resize disp_768p[DISP_TGT_MODE_MAX] = {
 	},
 	[DISP_TGT_MODE_TOP_FULL] = {
 		.tgt_rect = {
-			{128, 0, 768, 576},
+			{0, 0, 1024, 768},
 			{384, 576, 256, 192},
 		},
 	},
@@ -677,6 +678,312 @@ struct nds_disp_resize *res_sel = NULL;
 
 static uint16_t disp_mode = DISP_MODE_MAX;
 static SDL_Rect disp_rect;
+
+/* Transparent bottom screen configuration */
+#define NDS_ALPHA_STEP          25      /* Step for alpha adjustment */
+
+static struct {
+    SDL_bool enabled;           /* Enable transparent bottom screen */
+    Uint8 alpha;                /* Alpha value: 0=transparent, 255=opaque */
+} nds_overlay = {
+    .enabled = SDL_TRUE,       /* Default: disabled */
+    .alpha = 180,               /* Default: semi-transparent */
+};
+
+
+/* OpenGL ES function pointers and types for direct overlay rendering */
+typedef unsigned int GLenum;
+typedef int GLint;
+typedef unsigned int GLuint;
+typedef int GLsizei;
+typedef float GLfloat;
+typedef unsigned char GLboolean;
+typedef char GLchar;
+typedef unsigned short GLushort;
+typedef unsigned short GLushort;
+
+typedef void (*PFNGLBLENDFUNCPROC)(GLenum, GLenum);
+typedef void (*PFNGLENABLEPROC)(GLenum);
+typedef void (*PFNGLDISABLEPROC)(GLenum);
+typedef void (*PFNGLGENTEXTURESPROC)(GLsizei, GLuint*);
+typedef void (*PFNGLDELETETEXTURESPROC)(GLsizei, const GLuint*);
+typedef void (*PFNGLBINDTEXTUREPROC)(GLenum, GLuint);
+typedef void (*PFNGLTEXIMAGE2DPROC)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*);
+typedef void (*PFNGLTEXPARAMETERIPROC)(GLenum, GLenum, GLint);
+typedef void (*PFNGLACTIVETEXTUREPROC)(GLenum);
+typedef void (*PFNGLUSEPROGRAMPROC)(GLuint);
+typedef GLuint (*PFNGLCREATESHADERPROC)(GLenum);
+typedef void (*PFNGLSHADERSOURCEPROC)(GLuint, GLsizei, const GLchar**, const GLint*);
+typedef void (*PFNGLCOMPILESHADERPROC)(GLuint);
+typedef void (*PFNGLGETSHADERIVPROC)(GLuint, GLenum, GLint*);
+typedef GLuint (*PFNGLCREATEPROGRAMPROC)(void);
+typedef void (*PFNGLATTACHSHADERPROC)(GLuint, GLuint);
+typedef void (*PFNGLLINKPROGRAMPROC)(GLuint);
+typedef void (*PFNGLGETPROGRAMIVPROC)(GLuint, GLenum, GLint*);
+typedef GLint (*PFNGLGETUNIFORMLOCATIONPROC)(GLuint, const GLchar*);
+typedef GLint (*PFNGLGETATTRIBLOCATIONPROC)(GLuint, const GLchar*);
+typedef void (*PFNGLUNIFORM1IPROC)(GLint, GLint);
+typedef void (*PFNGLUNIFORM1FPROC)(GLint, GLfloat);
+typedef void (*PFNGLVERTEXATTRIBPOINTERPROC)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void*);
+typedef void (*PFNGLENABLEVERTEXATTRIBARRAYPROC)(GLuint);
+typedef void (*PFNGLDRAWELEMENTSPROC)(GLenum, GLsizei, GLenum, const void*);
+typedef void (*PFNGLDELETESHADERPROC)(GLuint);
+typedef void (*PFNGLDELETEPROGRAMPROC)(GLuint);
+typedef void (*PFNGLVIEWPORTPROC)(GLint, GLint, GLsizei, GLsizei);
+typedef void (*PFNGLGETINTEGERVPROC)(GLenum, GLint*);
+
+#define GL_BLEND 0x0BE2
+#define GL_SRC_ALPHA 0x0302
+#define GL_ONE_MINUS_SRC_ALPHA 0x0303
+#define GL_TEXTURE_2D 0x0DE1
+#define GL_TEXTURE0 0x84C0
+#define GL_RGBA 0x1908
+#define GL_UNSIGNED_BYTE 0x1401
+#define GL_TEXTURE_MIN_FILTER 0x2801
+#define GL_TEXTURE_MAG_FILTER 0x2800
+#define GL_LINEAR 0x2601
+#define GL_NEAREST 0x2600
+#define GL_FRAGMENT_SHADER 0x8B30
+#define GL_VERTEX_SHADER 0x8B31
+#define GL_COMPILE_STATUS 0x8B81
+#define GL_LINK_STATUS 0x8B82
+#define GL_FLOAT 0x1406
+#define GL_FALSE 0
+#define GL_TRUE 1
+#define GL_TRIANGLES 0x0004
+#define GL_UNSIGNED_SHORT 0x1403
+#define GL_VIEWPORT 0x0BA2
+#define GL_CURRENT_PROGRAM 0x8B8D
+
+static struct {
+	SDL_bool loaded;
+	PFNGLBLENDFUNCPROC BlendFunc;
+	PFNGLENABLEPROC Enable;
+	PFNGLDISABLEPROC Disable;
+	PFNGLGENTEXTURESPROC GenTextures;
+	PFNGLDELETETEXTURESPROC DeleteTextures;
+	PFNGLBINDTEXTUREPROC BindTexture;
+	PFNGLTEXIMAGE2DPROC TexImage2D;
+	PFNGLTEXPARAMETERIPROC TexParameteri;
+	PFNGLACTIVETEXTUREPROC ActiveTexture;
+	PFNGLUSEPROGRAMPROC UseProgram;
+	PFNGLCREATESHADERPROC CreateShader;
+	PFNGLSHADERSOURCEPROC ShaderSource;
+	PFNGLCOMPILESHADERPROC CompileShader;
+	PFNGLGETSHADERIVPROC GetShaderiv;
+	PFNGLCREATEPROGRAMPROC CreateProgram;
+	PFNGLATTACHSHADERPROC AttachShader;
+	PFNGLLINKPROGRAMPROC LinkProgram;
+	PFNGLGETPROGRAMIVPROC GetProgramiv;
+	PFNGLGETUNIFORMLOCATIONPROC GetUniformLocation;
+	PFNGLGETATTRIBLOCATIONPROC GetAttribLocation;
+	PFNGLUNIFORM1IPROC Uniform1i;
+	PFNGLUNIFORM1FPROC Uniform1f;
+	PFNGLVERTEXATTRIBPOINTERPROC VertexAttribPointer;
+	PFNGLENABLEVERTEXATTRIBARRAYPROC EnableVertexAttribArray;
+	PFNGLDRAWELEMENTSPROC DrawElements;
+	PFNGLDELETESHADERPROC DeleteShader;
+	PFNGLDELETEPROGRAMPROC DeleteProgram;
+	PFNGLVIEWPORTPROC Viewport;
+	PFNGLGETINTEGERVPROC GetIntegerv;
+} nds_gl = {0};
+
+static struct {
+	SDL_bool initialized;
+	GLuint program;
+	GLint loc_position;
+	GLint loc_texcoord;
+	GLint loc_sampler;
+	GLint loc_alpha;
+} nds_overlay_gl = {0};
+
+static const char *nds_overlay_vs =
+	"attribute vec2 a_position;\n"
+	"attribute vec2 a_texCoord;\n"
+	"varying vec2 v_texCoord;\n"
+	"void main() {\n"
+	"    gl_Position = vec4(a_position, 0.0, 1.0);\n"
+	"    v_texCoord = a_texCoord;\n"
+	"}\n";
+
+static const char *nds_overlay_fs =
+	"precision mediump float;\n"
+	"uniform sampler2D u_texture;\n"
+	"uniform float u_alpha;\n"
+	"varying vec2 v_texCoord;\n"
+	"void main() {\n"
+	"    vec4 tex = texture2D(u_texture, v_texCoord);\n"
+	"    gl_FragColor = vec4(tex.bgr, u_alpha);\n"
+	"}\n";
+
+static SDL_bool nds_overlay_gl_load_funcs(void)
+{
+	if (nds_gl.loaded) return SDL_TRUE;
+
+	nds_gl.BlendFunc = (PFNGLBLENDFUNCPROC)SDL_GL_GetProcAddress("glBlendFunc");
+	nds_gl.Enable = (PFNGLENABLEPROC)SDL_GL_GetProcAddress("glEnable");
+	nds_gl.Disable = (PFNGLDISABLEPROC)SDL_GL_GetProcAddress("glDisable");
+	nds_gl.GenTextures = (PFNGLGENTEXTURESPROC)SDL_GL_GetProcAddress("glGenTextures");
+	nds_gl.DeleteTextures = (PFNGLDELETETEXTURESPROC)SDL_GL_GetProcAddress("glDeleteTextures");
+	nds_gl.BindTexture = (PFNGLBINDTEXTUREPROC)SDL_GL_GetProcAddress("glBindTexture");
+	nds_gl.TexImage2D = (PFNGLTEXIMAGE2DPROC)SDL_GL_GetProcAddress("glTexImage2D");
+	nds_gl.TexParameteri = (PFNGLTEXPARAMETERIPROC)SDL_GL_GetProcAddress("glTexParameteri");
+	nds_gl.ActiveTexture = (PFNGLACTIVETEXTUREPROC)SDL_GL_GetProcAddress("glActiveTexture");
+	nds_gl.UseProgram = (PFNGLUSEPROGRAMPROC)SDL_GL_GetProcAddress("glUseProgram");
+	nds_gl.CreateShader = (PFNGLCREATESHADERPROC)SDL_GL_GetProcAddress("glCreateShader");
+	nds_gl.ShaderSource = (PFNGLSHADERSOURCEPROC)SDL_GL_GetProcAddress("glShaderSource");
+	nds_gl.CompileShader = (PFNGLCOMPILESHADERPROC)SDL_GL_GetProcAddress("glCompileShader");
+	nds_gl.GetShaderiv = (PFNGLGETSHADERIVPROC)SDL_GL_GetProcAddress("glGetShaderiv");
+	nds_gl.CreateProgram = (PFNGLCREATEPROGRAMPROC)SDL_GL_GetProcAddress("glCreateProgram");
+	nds_gl.AttachShader = (PFNGLATTACHSHADERPROC)SDL_GL_GetProcAddress("glAttachShader");
+	nds_gl.LinkProgram = (PFNGLLINKPROGRAMPROC)SDL_GL_GetProcAddress("glLinkProgram");
+	nds_gl.GetProgramiv = (PFNGLGETPROGRAMIVPROC)SDL_GL_GetProcAddress("glGetProgramiv");
+	nds_gl.GetUniformLocation = (PFNGLGETUNIFORMLOCATIONPROC)SDL_GL_GetProcAddress("glGetUniformLocation");
+	nds_gl.GetAttribLocation = (PFNGLGETATTRIBLOCATIONPROC)SDL_GL_GetProcAddress("glGetAttribLocation");
+	nds_gl.Uniform1i = (PFNGLUNIFORM1IPROC)SDL_GL_GetProcAddress("glUniform1i");
+	nds_gl.Uniform1f = (PFNGLUNIFORM1FPROC)SDL_GL_GetProcAddress("glUniform1f");
+	nds_gl.VertexAttribPointer = (PFNGLVERTEXATTRIBPOINTERPROC)SDL_GL_GetProcAddress("glVertexAttribPointer");
+	nds_gl.EnableVertexAttribArray = (PFNGLENABLEVERTEXATTRIBARRAYPROC)SDL_GL_GetProcAddress("glEnableVertexAttribArray");
+	nds_gl.DrawElements = (PFNGLDRAWELEMENTSPROC)SDL_GL_GetProcAddress("glDrawElements");
+	nds_gl.DeleteShader = (PFNGLDELETESHADERPROC)SDL_GL_GetProcAddress("glDeleteShader");
+	nds_gl.DeleteProgram = (PFNGLDELETEPROGRAMPROC)SDL_GL_GetProcAddress("glDeleteProgram");
+	nds_gl.Viewport = (PFNGLVIEWPORTPROC)SDL_GL_GetProcAddress("glViewport");
+	nds_gl.GetIntegerv = (PFNGLGETINTEGERVPROC)SDL_GL_GetProcAddress("glGetIntegerv");
+
+	if (!nds_gl.BlendFunc || !nds_gl.Enable || !nds_gl.GenTextures ||
+	    !nds_gl.BindTexture || !nds_gl.TexImage2D || !nds_gl.UseProgram ||
+	    !nds_gl.CreateShader || !nds_gl.CreateProgram) {
+		return SDL_FALSE;
+	}
+
+	nds_gl.loaded = SDL_TRUE;
+	return SDL_TRUE;
+}
+
+static SDL_bool nds_overlay_gl_init(void)
+{
+	GLuint vs, fs;
+	GLint status;
+
+	if (nds_overlay_gl.initialized) return SDL_TRUE;
+	if (!nds_overlay_gl_load_funcs()) return SDL_FALSE;
+
+	/* Create vertex shader */
+	vs = nds_gl.CreateShader(GL_VERTEX_SHADER);
+	nds_gl.ShaderSource(vs, 1, &nds_overlay_vs, NULL);
+	nds_gl.CompileShader(vs);
+	nds_gl.GetShaderiv(vs, GL_COMPILE_STATUS, &status);
+	if (!status) {
+		nds_gl.DeleteShader(vs);
+		return SDL_FALSE;
+	}
+
+	/* Create fragment shader */
+	fs = nds_gl.CreateShader(GL_FRAGMENT_SHADER);
+	nds_gl.ShaderSource(fs, 1, &nds_overlay_fs, NULL);
+	nds_gl.CompileShader(fs);
+	nds_gl.GetShaderiv(fs, GL_COMPILE_STATUS, &status);
+	if (!status) {
+		nds_gl.DeleteShader(vs);
+		nds_gl.DeleteShader(fs);
+		return SDL_FALSE;
+	}
+
+	/* Create program */
+	nds_overlay_gl.program = nds_gl.CreateProgram();
+	nds_gl.AttachShader(nds_overlay_gl.program, vs);
+	nds_gl.AttachShader(nds_overlay_gl.program, fs);
+	nds_gl.LinkProgram(nds_overlay_gl.program);
+	nds_gl.GetProgramiv(nds_overlay_gl.program, GL_LINK_STATUS, &status);
+	nds_gl.DeleteShader(vs);
+	nds_gl.DeleteShader(fs);
+	if (!status) {
+		nds_gl.DeleteProgram(nds_overlay_gl.program);
+		return SDL_FALSE;
+	}
+
+	/* Get locations */
+	nds_overlay_gl.loc_position = nds_gl.GetAttribLocation(nds_overlay_gl.program, "a_position");
+	nds_overlay_gl.loc_texcoord = nds_gl.GetAttribLocation(nds_overlay_gl.program, "a_texCoord");
+	nds_overlay_gl.loc_sampler = nds_gl.GetUniformLocation(nds_overlay_gl.program, "u_texture");
+	nds_overlay_gl.loc_alpha = nds_gl.GetUniformLocation(nds_overlay_gl.program, "u_alpha");
+
+	nds_overlay_gl.initialized = SDL_TRUE;
+	return SDL_TRUE;
+}
+
+static void nds_overlay_gl_render(SDL_Texture *texture, const SDL_Rect *srcrect,
+                                   const SDL_Rect *dstrect, float alpha,
+                                   int screen_w, int screen_h)
+{
+	GLint saved_program = 0;
+	GLint saved_viewport[4];
+	float texw = 1.0f, texh = 1.0f;
+
+	if (!nds_overlay_gl_init()) return;
+
+	/* Save current GL state */
+	nds_gl.GetIntegerv(GL_CURRENT_PROGRAM, &saved_program);
+	nds_gl.GetIntegerv(GL_VIEWPORT, saved_viewport);
+
+	/* Use our program */
+	nds_gl.UseProgram(nds_overlay_gl.program);
+
+	/* Bind SDL texture directly - this avoids re-uploading pixel data */
+	nds_gl.ActiveTexture(GL_TEXTURE0);
+	if (SDL_GL_BindTexture(texture, &texw, &texh) != 0) {
+		nds_gl.UseProgram(saved_program);
+		return;
+	}
+
+	/* Set viewport to full screen */
+	nds_gl.Viewport(0, 0, screen_w, screen_h);
+
+	/* Calculate normalized device coordinates */
+	float x0 = (float)dstrect->x / screen_w * 2.0f - 1.0f;
+	float y0 = 1.0f - (float)dstrect->y / screen_h * 2.0f;
+	float x1 = (float)(dstrect->x + dstrect->w) / screen_w * 2.0f - 1.0f;
+	float y1 = 1.0f - (float)(dstrect->y + dstrect->h) / screen_h * 2.0f;
+
+	/* Calculate texture coordinates (use texw/texh from SDL_GL_BindTexture) */
+	float u0 = 0.0f, v0 = 0.0f;
+	float u1 = texw, v1 = texh;
+
+	/* Vertices: position (x,y) + texcoord (u,v) */
+	GLfloat vertices[] = {
+		x0, y0, u0, v0,  /* top-left */
+		x1, y0, u1, v0,  /* top-right */
+		x1, y1, u1, v1,  /* bottom-right */
+		x0, y1, u0, v1,  /* bottom-left */
+	};
+	GLushort indices[] = {0, 1, 2, 0, 2, 3};
+
+	/* Set uniforms */
+	nds_gl.Uniform1i(nds_overlay_gl.loc_sampler, 0);
+	nds_gl.Uniform1f(nds_overlay_gl.loc_alpha, alpha);
+
+	/* Set vertex attributes */
+	nds_gl.VertexAttribPointer(nds_overlay_gl.loc_position, 2, GL_FLOAT, GL_FALSE,
+	                           4 * sizeof(GLfloat), vertices);
+	nds_gl.EnableVertexAttribArray(nds_overlay_gl.loc_position);
+	nds_gl.VertexAttribPointer(nds_overlay_gl.loc_texcoord, 2, GL_FLOAT, GL_FALSE,
+	                           4 * sizeof(GLfloat), vertices + 2);
+	nds_gl.EnableVertexAttribArray(nds_overlay_gl.loc_texcoord);
+
+	/* Enable blending */
+	nds_gl.Enable(GL_BLEND);
+	nds_gl.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+	/* Draw */
+	nds_gl.DrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+
+	/* Unbind and restore GL state */
+	SDL_GL_UnbindTexture(texture);
+	nds_gl.Disable(GL_BLEND);
+	nds_gl.UseProgram(saved_program);
+	nds_gl.Viewport(saved_viewport[0], saved_viewport[1],
+	                saved_viewport[2], saved_viewport[3]);
+}
 
 static char renderer_magic;
 static char texture_magic;
@@ -1779,6 +2086,30 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
             } else {
                 event->tfinger.y = (event->tfinger.y - normalized_viewport_y) / normalized_viewport_h;
             }
+        }
+    } else if (event->type == SDL_KEYDOWN) {
+        /* NDS overlay hotkeys */
+        switch (event->key.keysym.scancode) {
+        case SDL_SCANCODE_T:
+            /* Toggle overlay */
+            nds_overlay.enabled = !nds_overlay.enabled;
+            break;
+        case SDL_SCANCODE_N:
+            /* Increase alpha (more opaque) */
+            if (nds_overlay.alpha <= 255 - NDS_ALPHA_STEP)
+                nds_overlay.alpha += NDS_ALPHA_STEP;
+            else
+                nds_overlay.alpha = 255;
+            break;
+        case SDL_SCANCODE_P:
+            /* Decrease alpha (more transparent) */
+            if (nds_overlay.alpha >= NDS_ALPHA_STEP)
+                nds_overlay.alpha -= NDS_ALPHA_STEP;
+            else
+                nds_overlay.alpha = 0;
+            break;
+        default:
+            break;
         }
     }
 
@@ -4423,6 +4754,23 @@ static inline bool nds_rect_is_first_screen(const SDL_Rect *dstrect)
 	return (dstrect->x == 0 && dstrect->y == 0);
 }
 
+static inline bool nds_is_dual_screen_mode(void)
+{
+	return (disp_mode == DISP_MODE_H || disp_mode == DISP_MODE_V);
+}
+
+static inline int nds_get_screen_index(const SDL_Rect *dstrect)
+{
+	switch (disp_mode) {
+	case DISP_MODE_H:
+		return (dstrect->x >= NDS_DRASTIC_H) ? 1 : 0;
+	case DISP_MODE_V:
+		return (dstrect->y >= NDS_DRASTIC_V) ? 1 : 0;
+	default:
+		return 0;
+	}
+}
+
 const char *to_lang(const char *p)
 {
     const char *info = p;
@@ -5367,6 +5715,7 @@ static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
 		return ret;
 	}
 
+	/* Handle pointer texture (32x32 cursor) */
 	if (nds_tex_is_pointer(texture)) {
 		rect_idx = nds_pointer_in_first_screen(dstrect) ? 0 : 1;
 		scale = cur_res->pointer_scale[rect_idx];
@@ -5374,19 +5723,47 @@ static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
 			offset_x = NDS_DRASTIC_H;
 		if (dstrect->y >= NDS_DRASTIC_V)
 			offset_y = NDS_DRASTIC_V;
-		dstfrect.x = (float) (dstrect->x - offset_x) * scale +
+		dstfrect.x = (float)(dstrect->x - offset_x) * scale +
 				cur_res->tgt_rect[rect_idx].x;
-		dstfrect.y = (float) (dstrect->y - offset_y) * scale +
+		dstfrect.y = (float)(dstrect->y - offset_y) * scale +
 				cur_res->tgt_rect[rect_idx].y;
-		dstfrect.w = (float) dstrect->w * scale;
-		dstfrect.h = (float) dstrect->h * scale;
-		return SDL_RenderCopyF(renderer, texture, srcrect,  &dstfrect);
+		dstfrect.w = (float)dstrect->w * scale;
+		dstfrect.h = (float)dstrect->h * scale;
+		return SDL_RenderCopyF(renderer, texture, srcrect, &dstfrect);
 	}
 
-	rect_idx = nds_pointer_in_first_screen(dstrect) ? 0 : 1;
-	ret = SDL_RenderCopy_nds(renderer, texture,  srcrect, &cur_res->tgt_rect[rect_idx]);
+	/* Handle screen textures */
+	rect_idx = nds_get_screen_index(dstrect);
+
+	/* Transparent mode: bottom screen rendered with alpha */
+	if (nds_overlay.enabled && rect_idx == 1) {
+		/* Bottom screen with transparency */
+		if (nds_overlay.alpha == 255) {
+			/* Fully opaque, render normally */
+			ret = SDL_RenderCopy_nds(renderer, texture, srcrect, &cur_res->tgt_rect[rect_idx]);
+		} else if (nds_overlay.alpha == 0) {
+			/* Fully transparent, skip rendering */
+			ret = 0;
+		} else {
+			/* Use direct GL rendering for transparency */
+			SDL_RenderFlush(renderer);
+
+			int screen_w, screen_h;
+			SDL_GetRendererOutputSize(renderer, &screen_w, &screen_h);
+
+			float alpha_f = nds_overlay.alpha / 255.0f;
+			nds_overlay_gl_render(texture, srcrect, &cur_res->tgt_rect[rect_idx],
+			                      alpha_f, screen_w, screen_h);
+		}
+	} else {
+		/* Top screen or non-transparent mode: render normally */
+		ret = SDL_RenderCopy_nds(renderer, texture, srcrect, &cur_res->tgt_rect[rect_idx]);
+	}
+
 	if (unlikely(ret))
 		return ret;
+
+	/* Render background bezel after second screen */
 	if (rect_idx && cur_res->bg_tex)
 		ret = SDL_RenderCopyF(renderer, cur_res->bg_tex, NULL, NULL);
 
