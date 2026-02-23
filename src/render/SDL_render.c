@@ -308,6 +308,8 @@ static char *nds_bg_png[DISP_TGT_MODE_MAX] = {
 struct nds_disp_resize {
 	SDL_Texture *bg_tex;
 	float pointer_scale[NDS_DRASTIC_SCR_MAX];
+	int rotate;  /* rotation angle: 0, 90, 180, 270 */
+	SDL_Vertex vertices[NDS_DRASTIC_SCR_MAX][4];  /* pre-calculated vertices for rotation */
 	union {
 		SDL_Rect tgt_rect[NDS_DRASTIC_SCR_MAX];
 		struct {
@@ -316,6 +318,10 @@ struct nds_disp_resize {
 		};
 	};
 };
+
+/* Forward declaration for vertex calculation */
+static void nds_calc_rotate_vertices(SDL_Vertex *vertices, const SDL_Rect *dtr, int rotate);
+static void nds_layout_calc_vertices(struct nds_disp_resize *layout);
 
 static struct nds_disp_resize disp_rgb30[DISP_TGT_MODE_MAX] = {
 	[DISP_TGT_MODE_2DS] = {
@@ -1405,9 +1411,13 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 			if (!layout)
 				continue;
 
-			/* Copy screen rects */
+			/* Copy screen rects and rotation */
 			nds_json_layouts.layouts[i].tgt_rect[0] = layout->screen[0];
 			nds_json_layouts.layouts[i].tgt_rect[1] = layout->screen[1];
+			nds_json_layouts.layouts[i].rotate = layout->rotate;
+
+			/* Pre-calculate vertices for rotation */
+			nds_layout_calc_vertices(&nds_json_layouts.layouts[i]);
 
 			/* Load background texture if specified */
 			bg_path = nds_layout_get_bg_path(i);
@@ -4963,6 +4973,155 @@ int SDL_RenderFillRectsF(SDL_Renderer *renderer,
     return retval < 0 ? retval : FlushRenderCommandsIfNotBatching(renderer);
 }
 
+/* Pre-calculate vertices for rotated rendering */
+static void nds_calc_rotate_vertices(SDL_Vertex *vertices, const SDL_Rect *dtr, int rotate)
+{
+    SDL_Color white = {255, 255, 255, 255};
+    float dx, dy, dw, dh;
+
+    if (rotate == 90) {
+        /* rotate=90: layout w = display height, h = display width */
+        dx = (float)dtr->x;
+        dy = (float)dtr->y;
+        dw = (float)dtr->h;  /* Display width = layout h */
+        dh = (float)dtr->w;  /* Display height = layout w */
+
+        /* Vertex 0: top-left of display <- bottom-left of texture */
+        vertices[0].position.x = dx;
+        vertices[0].position.y = dy;
+        vertices[0].tex_coord.x = 0.0f;
+        vertices[0].tex_coord.y = 1.0f;
+        vertices[0].color = white;
+
+        /* Vertex 1: top-right of display <- top-left of texture */
+        vertices[1].position.x = dx + dw;
+        vertices[1].position.y = dy;
+        vertices[1].tex_coord.x = 0.0f;
+        vertices[1].tex_coord.y = 0.0f;
+        vertices[1].color = white;
+
+        /* Vertex 2: bottom-right of display <- top-right of texture */
+        vertices[2].position.x = dx + dw;
+        vertices[2].position.y = dy + dh;
+        vertices[2].tex_coord.x = 1.0f;
+        vertices[2].tex_coord.y = 0.0f;
+        vertices[2].color = white;
+
+        /* Vertex 3: bottom-left of display <- bottom-right of texture */
+        vertices[3].position.x = dx;
+        vertices[3].position.y = dy + dh;
+        vertices[3].tex_coord.x = 1.0f;
+        vertices[3].tex_coord.y = 1.0f;
+        vertices[3].color = white;
+    }
+    else if (rotate == 270) {
+        dx = (float)dtr->x;
+        dy = (float)dtr->y;
+        dw = (float)dtr->h;
+        dh = (float)dtr->w;
+
+        /* Vertex 0: top-left of display <- top-right of texture */
+        vertices[0].position.x = dx;
+        vertices[0].position.y = dy;
+        vertices[0].tex_coord.x = 1.0f;
+        vertices[0].tex_coord.y = 0.0f;
+        vertices[0].color = white;
+
+        /* Vertex 1: top-right of display <- bottom-right of texture */
+        vertices[1].position.x = dx + dw;
+        vertices[1].position.y = dy;
+        vertices[1].tex_coord.x = 1.0f;
+        vertices[1].tex_coord.y = 1.0f;
+        vertices[1].color = white;
+
+        /* Vertex 2: bottom-right of display <- bottom-left of texture */
+        vertices[2].position.x = dx + dw;
+        vertices[2].position.y = dy + dh;
+        vertices[2].tex_coord.x = 0.0f;
+        vertices[2].tex_coord.y = 1.0f;
+        vertices[2].color = white;
+
+        /* Vertex 3: bottom-left of display <- top-left of texture */
+        vertices[3].position.x = dx;
+        vertices[3].position.y = dy + dh;
+        vertices[3].tex_coord.x = 0.0f;
+        vertices[3].tex_coord.y = 0.0f;
+        vertices[3].color = white;
+    }
+    else if (rotate == 180) {
+        dx = (float)dtr->x;
+        dy = (float)dtr->y;
+        dw = (float)dtr->w;
+        dh = (float)dtr->h;
+
+        /* Vertex 0: top-left of display <- bottom-right of texture */
+        vertices[0].position.x = dx;
+        vertices[0].position.y = dy;
+        vertices[0].tex_coord.x = 1.0f;
+        vertices[0].tex_coord.y = 1.0f;
+        vertices[0].color = white;
+
+        /* Vertex 1: top-right of display <- bottom-left of texture */
+        vertices[1].position.x = dx + dw;
+        vertices[1].position.y = dy;
+        vertices[1].tex_coord.x = 0.0f;
+        vertices[1].tex_coord.y = 1.0f;
+        vertices[1].color = white;
+
+        /* Vertex 2: bottom-right of display <- top-left of texture */
+        vertices[2].position.x = dx + dw;
+        vertices[2].position.y = dy + dh;
+        vertices[2].tex_coord.x = 0.0f;
+        vertices[2].tex_coord.y = 0.0f;
+        vertices[2].color = white;
+
+        /* Vertex 3: bottom-left of display <- top-right of texture */
+        vertices[3].position.x = dx;
+        vertices[3].position.y = dy + dh;
+        vertices[3].tex_coord.x = 1.0f;
+        vertices[3].tex_coord.y = 0.0f;
+        vertices[3].color = white;
+    }
+    else {
+        /* rotate=0: standard mapping */
+        dx = (float)dtr->x;
+        dy = (float)dtr->y;
+        dw = (float)dtr->w;
+        dh = (float)dtr->h;
+
+        vertices[0].position.x = dx;
+        vertices[0].position.y = dy;
+        vertices[0].tex_coord.x = 0.0f;
+        vertices[0].tex_coord.y = 0.0f;
+        vertices[0].color = white;
+
+        vertices[1].position.x = dx + dw;
+        vertices[1].position.y = dy;
+        vertices[1].tex_coord.x = 1.0f;
+        vertices[1].tex_coord.y = 0.0f;
+        vertices[1].color = white;
+
+        vertices[2].position.x = dx + dw;
+        vertices[2].position.y = dy + dh;
+        vertices[2].tex_coord.x = 1.0f;
+        vertices[2].tex_coord.y = 1.0f;
+        vertices[2].color = white;
+
+        vertices[3].position.x = dx;
+        vertices[3].position.y = dy + dh;
+        vertices[3].tex_coord.x = 0.0f;
+        vertices[3].tex_coord.y = 1.0f;
+        vertices[3].color = white;
+    }
+}
+
+/* Pre-calculate vertices for a layout (both screens) */
+static void nds_layout_calc_vertices(struct nds_disp_resize *layout)
+{
+    nds_calc_rotate_vertices(layout->vertices[0], &layout->tgt_rect[0], layout->rotate);
+    nds_calc_rotate_vertices(layout->vertices[1], &layout->tgt_rect[1], layout->rotate);
+}
+
 static inline int SDL_RenderCopy_nds(SDL_Renderer *renderer, SDL_Texture *texture,
                    const SDL_Rect *str, const SDL_Rect *dtr)
 {
@@ -4976,6 +5135,26 @@ static inline int SDL_RenderCopy_nds(SDL_Renderer *renderer, SDL_Texture *textur
     pdstfrect = &dstfrect;
 
     return SDL_RenderCopyF(renderer, texture, str, pdstfrect);
+}
+
+/* Render using pre-calculated vertices (for rotation support) */
+static inline int SDL_RenderCopyEx_nds(SDL_Renderer *renderer, SDL_Texture *texture,
+                   const SDL_Vertex *vertices, int rotate)
+{
+    static const int indices[6] = {0, 1, 2, 2, 3, 0};
+
+    if (rotate == 0) {
+        /* No rotation - use standard copy from vertex positions */
+        SDL_FRect dstfrect;
+        dstfrect.x = vertices[0].position.x;
+        dstfrect.y = vertices[0].position.y;
+        dstfrect.w = vertices[1].position.x - vertices[0].position.x;
+        dstfrect.h = vertices[3].position.y - vertices[0].position.y;
+        return SDL_RenderCopyF(renderer, texture, NULL, &dstfrect);
+    }
+
+    /* For rotation, use SDL_RenderGeometry with pre-calculated vertices */
+    return SDL_RenderGeometry(renderer, texture, vertices, 4, indices, 6);
 }
 
 static inline bool nds_tex_is_pointer(const SDL_Texture *texture)
@@ -5946,7 +6125,7 @@ static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
 			return SDL_RenderCopyF(renderer, texture, srcrect, &dstfrect);
 		}
 
-		ret = SDL_RenderCopy_nds(renderer, texture, srcrect, &cur_res->tgt_rect[0]);
+		ret = SDL_RenderCopyEx_nds(renderer, texture, cur_res->vertices[0], cur_res->rotate);
 		if (unlikely(ret))
 			return ret;
 		if (cur_res->bg_tex)
@@ -5978,13 +6157,14 @@ static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
 	if (nds_overlay.enabled && rect_idx == 1) {
 		/* Bottom screen with transparency */
 		if (nds_overlay.alpha == 255) {
-			/* Fully opaque, render normally */
-			ret = SDL_RenderCopy_nds(renderer, texture, srcrect, &cur_res->tgt_rect[rect_idx]);
+			/* Fully opaque, render normally (with rotation if specified) */
+			ret = SDL_RenderCopyEx_nds(renderer, texture, cur_res->vertices[rect_idx], cur_res->rotate);
 		} else if (nds_overlay.alpha == 0) {
 			/* Fully transparent, skip rendering */
 			ret = 0;
 		} else {
 			/* Use direct GL rendering for transparency */
+			/* Note: GL overlay rendering doesn't support rotation yet */
 			SDL_RenderFlush(renderer);
 
 			int screen_w, screen_h;
@@ -5995,8 +6175,8 @@ static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
 			                      alpha_f, screen_w, screen_h);
 		}
 	} else {
-		/* Top screen or non-transparent mode: render normally */
-		ret = SDL_RenderCopy_nds(renderer, texture, srcrect, &cur_res->tgt_rect[rect_idx]);
+		/* Top screen or non-transparent mode: render normally (with rotation if specified) */
+		ret = SDL_RenderCopyEx_nds(renderer, texture, cur_res->vertices[rect_idx], cur_res->rotate);
 	}
 
 	if (unlikely(ret))
