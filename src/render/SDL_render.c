@@ -696,13 +696,13 @@ static struct {
 
 /* Transparent bottom screen configuration */
 #define NDS_ALPHA_STEP          25      /* Step for alpha adjustment */
+#define NDS_ALPHA_MIN           50      /* Minimum alpha value */
+#define NDS_ALPHA_MAX           255     /* Maximum alpha (fully opaque = disabled) */
 
 static struct {
-    SDL_bool enabled;           /* Enable transparent bottom screen */
-    Uint8 alpha;                /* Alpha value: 0=transparent, 255=opaque */
+    Uint8 alpha;                /* Alpha value: 50-254=transparent, 255=disabled */
 } nds_overlay = {
-    .enabled = SDL_TRUE,       /* Default: disabled */
-    .alpha = 180,               /* Default: semi-transparent */
+    .alpha = NDS_ALPHA_MAX,     /* Default: disabled (fully opaque) */
 };
 
 
@@ -1447,8 +1447,18 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 		/* Load saved alpha from settings.json */
 		{
 			int saved_alpha = nds_settings_load_alpha();
-			if (saved_alpha >= 0 && saved_alpha <= 255) {
-				nds_overlay.alpha = (Uint8)saved_alpha;
+			if (saved_alpha >= 0) {
+				if (saved_alpha <= 7) {
+					/* ADV branch format: 0-7, where 0=opaque, 7=most transparent */
+					/* Convert to rock format: 255=disabled, 50=most transparent */
+					/* rock_alpha = 255 - adv_val * (255-50)/7 ≈ 255 - adv_val * 29 */
+					nds_overlay.alpha = (Uint8)(255 - saved_alpha * 29);
+					if (nds_overlay.alpha < NDS_ALPHA_MIN)
+						nds_overlay.alpha = NDS_ALPHA_MIN;
+				} else if (saved_alpha >= NDS_ALPHA_MIN && saved_alpha <= NDS_ALPHA_MAX) {
+					/* Rock branch format: 50-255 */
+					nds_overlay.alpha = (Uint8)saved_alpha;
+				}
 			}
 		}
 
@@ -2272,25 +2282,29 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
     } else if (event->type == SDL_KEYDOWN) {
         /* NDS overlay hotkeys */
         switch (event->key.keysym.scancode) {
-        case SDL_SCANCODE_T:
-            /* Toggle overlay */
-            nds_overlay.enabled = !nds_overlay.enabled;
-            break;
         case SDL_SCANCODE_Z:
-            /* Increase alpha (more opaque) */
-            if (nds_overlay.alpha <= 255 - NDS_ALPHA_STEP)
+            /* Increase alpha (more opaque / towards disabled) */
+            /* Ignore in rotate mode since alpha not supported */
+            if (nds_disp_resize_used[DISP_MODE_H].rotate != 0)
+                break;
+            if (nds_overlay.alpha <= NDS_ALPHA_MAX - NDS_ALPHA_STEP)
                 nds_overlay.alpha += NDS_ALPHA_STEP;
             else
-                nds_overlay.alpha = 255;
+                nds_overlay.alpha = NDS_ALPHA_MAX;
             nds_settings_save_alpha(nds_overlay.alpha);
+            printf("Alpha: %d\n", nds_overlay.alpha);
             break;
         case SDL_SCANCODE_P:
             /* Decrease alpha (more transparent) */
-            if (nds_overlay.alpha >= NDS_ALPHA_STEP)
+            /* Ignore in rotate mode since alpha not supported */
+            if (nds_disp_resize_used[DISP_MODE_H].rotate != 0)
+                break;
+            if (nds_overlay.alpha >= NDS_ALPHA_MIN + NDS_ALPHA_STEP)
                 nds_overlay.alpha -= NDS_ALPHA_STEP;
             else
-                nds_overlay.alpha = 0;
+                nds_overlay.alpha = NDS_ALPHA_MIN;
             nds_settings_save_alpha(nds_overlay.alpha);
+            printf("Alpha: %d\n", nds_overlay.alpha);
             break;
         case SDL_SCANCODE_UP:
             /* Switch to previous layout */
@@ -6153,29 +6167,19 @@ static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
 	/* Handle screen textures */
 	rect_idx = nds_get_screen_index(dstrect);
 
-	/* Transparent mode: bottom screen rendered with alpha */
-	if (nds_overlay.enabled && rect_idx == 1) {
-		/* Bottom screen with transparency */
-		if (nds_overlay.alpha == 255) {
-			/* Fully opaque, render normally (with rotation if specified) */
-			ret = SDL_RenderCopyEx_nds(renderer, texture, cur_res->vertices[rect_idx], cur_res->rotate);
-		} else if (nds_overlay.alpha == 0) {
-			/* Fully transparent, skip rendering */
-			ret = 0;
-		} else {
-			/* Use direct GL rendering for transparency */
-			/* Note: GL overlay rendering doesn't support rotation yet */
-			SDL_RenderFlush(renderer);
+	/* Transparent mode: bottom screen rendered with alpha (only when not rotated) */
+	if (rect_idx == 1 && nds_overlay.alpha < NDS_ALPHA_MAX && cur_res->rotate == 0) {
+		/* Bottom screen with transparency (alpha not supported in rotate mode) */
+		SDL_RenderFlush(renderer);
 
-			int screen_w, screen_h;
-			SDL_GetRendererOutputSize(renderer, &screen_w, &screen_h);
+		int screen_w, screen_h;
+		SDL_GetRendererOutputSize(renderer, &screen_w, &screen_h);
 
-			float alpha_f = nds_overlay.alpha / 255.0f;
-			nds_overlay_gl_render(texture, srcrect, &cur_res->tgt_rect[rect_idx],
-			                      alpha_f, screen_w, screen_h);
-		}
+		float alpha_f = nds_overlay.alpha / 255.0f;
+		nds_overlay_gl_render(texture, srcrect, &cur_res->tgt_rect[rect_idx],
+		                      alpha_f, screen_w, screen_h);
 	} else {
-		/* Top screen or non-transparent mode: render normally (with rotation if specified) */
+		/* Top screen, non-transparent mode, or rotate mode: render normally */
 		ret = SDL_RenderCopyEx_nds(renderer, texture, cur_res->vertices[rect_idx], cur_res->rotate);
 	}
 
