@@ -213,10 +213,10 @@ void nds_settings_set_path(const char *path)
         g_settings_path[0] = '\0';
 }
 
-int nds_settings_load_position(void)
+int nds_settings_load_mode(void)
 {
     json_object *jfile, *jval;
-    int position = 0;
+    int mode = 0;
 
     if (g_settings_path[0] == '\0')
         return 0;
@@ -225,15 +225,18 @@ int nds_settings_load_position(void)
     if (!jfile)
         return 0;
 
-    if (json_object_object_get_ex(jfile, "position", &jval))
-        position = json_object_get_int(jval);
+    /* Try "mode" first (adv branch compatible), fallback to "position" for old configs */
+    if (json_object_object_get_ex(jfile, "mode", &jval))
+        mode = json_object_get_int(jval);
+    else if (json_object_object_get_ex(jfile, "position", &jval))
+        mode = json_object_get_int(jval);
 
     json_object_put(jfile);
-    printf("Loaded position=%d from %s\n", position, g_settings_path);
-    return position;
+    printf("Loaded mode=%d from %s\n", mode, g_settings_path);
+    return mode;
 }
 
-void nds_settings_save_position(int position)
+void nds_settings_save_mode(int mode)
 {
     json_object *jfile, *jval;
 
@@ -247,14 +250,16 @@ void nds_settings_save_position(int position)
             return;
     }
 
+    /* Remove old "position" key if exists, use "mode" for adv compatibility */
     json_object_object_del(jfile, "position");
-    jval = json_object_new_int(position);
-    json_object_object_add(jfile, "position", jval);
+    json_object_object_del(jfile, "mode");
+    jval = json_object_new_int(mode);
+    json_object_object_add(jfile, "mode", jval);
 
     if (json_object_to_file(g_settings_path, jfile) < 0)
         printf("Failed to save settings to %s\n", g_settings_path);
     else
-        printf("Saved position=%d to %s\n", position, g_settings_path);
+        printf("Saved mode=%d to %s\n", mode, g_settings_path);
 
     json_object_put(jfile);
 }

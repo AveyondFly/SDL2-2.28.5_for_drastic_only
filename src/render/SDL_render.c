@@ -1438,8 +1438,8 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 			nds_json_layouts.count++;
 		}
 
-		/* Load saved position from settings.json */
-		saved_position = nds_settings_load_position();
+		/* Load saved mode (layout index) from settings.json */
+		saved_position = nds_settings_load_mode();
 		if (saved_position >= 0 && saved_position < nds_json_layouts.count) {
 			nds_json_layouts.current = saved_position;
 		}
@@ -2315,7 +2315,7 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
                     nds_json_layouts.current = nds_json_layouts.count - 1;
                 nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
                 nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
-                nds_settings_save_position(nds_json_layouts.current);
+                nds_settings_save_mode(nds_json_layouts.current);
                 printf("Layout switched to %d/%d\n", nds_json_layouts.current, nds_json_layouts.count);
             }
             break;
@@ -2327,7 +2327,7 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
                     nds_json_layouts.current = 0;
                 nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
                 nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
-                nds_settings_save_position(nds_json_layouts.current);
+                nds_settings_save_mode(nds_json_layouts.current);
                 printf("Layout switched to %d/%d\n", nds_json_layouts.current, nds_json_layouts.count);
             }
             break;

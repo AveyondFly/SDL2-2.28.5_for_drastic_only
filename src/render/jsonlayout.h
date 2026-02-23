@@ -28,8 +28,8 @@ const char *nds_layout_get_bg_path(int index);
 
 /* Settings functions */
 void nds_settings_set_path(const char *path);
-int nds_settings_load_position(void);
-void nds_settings_save_position(int position);
+int nds_settings_load_mode(void);
+void nds_settings_save_mode(int mode);
 int nds_settings_load_alpha(void);
 void nds_settings_save_alpha(int alpha);
 int nds_settings_load_theme(void);
