@@ -1027,6 +1027,60 @@ static void nds_drastic_deinit()
 			SDL_DestroyTexture(res_sel[i].bg_tex);
 		res_sel[i].bg_tex = NULL;
 	}
+
+	/* Free menu resources */
+	if (cvt) {
+		SDL_FreeSurface(cvt);
+		cvt = NULL;
+	}
+	if (nds.menu.cursor) {
+		SDL_FreeSurface(nds.menu.cursor);
+		nds.menu.cursor = NULL;
+	}
+	if (nds.menu.drastic.cursor) {
+		SDL_FreeSurface(nds.menu.drastic.cursor);
+		nds.menu.drastic.cursor = NULL;
+	}
+	if (nds.menu.drastic.yes) {
+		SDL_FreeSurface(nds.menu.drastic.yes);
+		nds.menu.drastic.yes = NULL;
+	}
+	if (nds.menu.drastic.no) {
+		SDL_FreeSurface(nds.menu.drastic.no);
+		nds.menu.drastic.no = NULL;
+	}
+	if (nds.menu.drastic.bg0) {
+		SDL_FreeSurface(nds.menu.drastic.bg0);
+		nds.menu.drastic.bg0 = NULL;
+	}
+	if (nds.menu.drastic.bg1) {
+		SDL_FreeSurface(nds.menu.drastic.bg1);
+		nds.menu.drastic.bg1 = NULL;
+	}
+	if (nds.menu.drastic.main) {
+		SDL_FreeSurface(nds.menu.drastic.main);
+		nds.menu.drastic.main = NULL;
+	}
+	if (nds.menu.drastic.mtext) {
+		SDL_DestroyTexture(nds.menu.drastic.mtext);
+		nds.menu.drastic.mtext = NULL;
+	}
+
+	/* Free font */
+	if (nds.font) {
+		TTF_CloseFont(nds.font);
+		nds.font = NULL;
+	}
+	TTF_Quit();
+
+	/* Free translation strings */
+	for (i = 0; i < MAX_LANG_LINE; i++) {
+		if (translate[i]) {
+			free(translate[i]);
+			translate[i] = NULL;
+		}
+	}
+	printf("All resource freed.\n");
 }
 static void strip_newline(char *p)
 {
