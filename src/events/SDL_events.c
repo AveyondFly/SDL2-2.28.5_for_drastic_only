@@ -22,6 +22,7 @@
 
 /* General event handling code for SDL */
 
+#include <stdio.h>
 #include "SDL.h"
 #include "SDL_events.h"
 #include "SDL_thread.h"
@@ -753,6 +754,9 @@ static int SDL_SendWakeupEvent(void)
     return 0;
 }
 
+/* Forward declaration for D-pad rotation */
+static void SDL_RotateDpad(SDL_Event *event);
+
 /* Lock the event queue, take a peep at it, and unlock it */
 static int SDL_PeepEventsInternal(SDL_Event *events, int numevents, SDL_eventaction action,
                                   Uint32 minType, Uint32 maxType, SDL_bool include_sentinel)
@@ -851,7 +855,16 @@ static int SDL_PeepEventsInternal(SDL_Event *events, int numevents, SDL_eventact
 int SDL_PeepEvents(SDL_Event *events, int numevents, SDL_eventaction action,
                    Uint32 minType, Uint32 maxType)
 {
-    return SDL_PeepEventsInternal(events, numevents, action, minType, maxType, SDL_FALSE);
+    int result = SDL_PeepEventsInternal(events, numevents, action, minType, maxType, SDL_FALSE);
+    
+    /* Apply D-pad rotation when getting events */
+    if (result > 0 && events && action == SDL_GETEVENT) {
+        int i;
+        for (i = 0; i < result; i++) {
+            SDL_RotateDpad(&events[i]);
+        }
+    }
+    return result;
 }
 
 SDL_bool SDL_HasEvent(Uint32 type)
@@ -954,9 +967,374 @@ void SDL_PumpEvents(void)
 
 /* Public functions */
 
+/* External getter for D-pad rotation (defined in SDL_render.c) */
+extern int SDL_GetNdsDpadRotate(void);
+
+/* Cached D-pad and axis mappings for rotation */
+static int g_dpad_btn_up = -1;
+static int g_dpad_btn_down = -1;
+static int g_dpad_btn_left = -1;
+static int g_dpad_btn_right = -1;
+static int g_axis_leftx = 0;
+static int g_axis_lefty = 1;
+static int g_dpad_initialized = 0;
+
+/* Parse button number from mapping string like "b13" */
+static int SDL_ParseButtonMapping(const char *mapping, const char *key)
+{
+    char search[32];
+    const char *pos;
+    int btn;
+    
+    SDL_snprintf(search, sizeof(search), "%s:b", key);
+    pos = SDL_strstr(mapping, search);
+    if (pos) {
+        pos += SDL_strlen(search);
+        btn = SDL_atoi(pos);
+        return btn;
+    }
+    return -1;
+}
+
+/* Parse axis number from mapping string like "a0" or "+a1" or "-a0~" */
+static int SDL_ParseAxisMapping(const char *mapping, const char *key, int *inverted)
+{
+    char search[32];
+    const char *pos;
+    int axis;
+    
+    *inverted = 0;
+    
+    /* Try normal format: "leftx:a0" */
+    SDL_snprintf(search, sizeof(search), "%s:a", key);
+    pos = SDL_strstr(mapping, search);
+    if (!pos) {
+        /* Try inverted format: "leftx:-a0" or "+leftx:-a0" */
+        SDL_snprintf(search, sizeof(search), "%s:-a", key);
+        pos = SDL_strstr(mapping, search);
+        if (pos) {
+            *inverted = 1;
+            pos += SDL_strlen(search);
+            axis = SDL_atoi(pos);
+            return axis;
+        }
+        /* Try format with + prefix: "+leftx:+a0" */
+        SDL_snprintf(search, sizeof(search), "+%s:+a", key);
+        pos = SDL_strstr(mapping, search);
+        if (!pos) {
+            SDL_snprintf(search, sizeof(search), "-%s:-a", key);
+            pos = SDL_strstr(mapping, search);
+        }
+        if (pos) {
+            pos += SDL_strlen(search);
+            axis = SDL_atoi(pos);
+            return axis;
+        }
+        return -1;
+    }
+    
+    pos += SDL_strlen(search);
+    axis = SDL_atoi(pos);
+    
+    /* Check for ~ suffix (inverted) */
+    while (*pos >= '0' && *pos <= '9') pos++;
+    if (*pos == '~')
+        *inverted = 1;
+    
+    return axis;
+}
+
+/* Load D-pad mappings from gamecontrollerdb file */
+static void SDL_LoadDpadMappings(SDL_JoystickID which)
+{
+    SDL_Joystick *joy;
+    SDL_JoystickGUID guid;
+    char guid_str[64];
+    FILE *f;
+    char line[1024];
+    const char *db_path;
+    
+    if (g_dpad_initialized)
+        return;
+    
+    g_dpad_initialized = 1;
+    
+    joy = SDL_JoystickFromInstanceID(which);
+    if (!joy)
+        return;
+    
+    guid = SDL_JoystickGetGUID(joy);
+    SDL_JoystickGetGUIDString(guid, guid_str, sizeof(guid_str));
+    
+    db_path = SDL_getenv("SDL_GAMECONTROLLERCONFIG_FILE");
+    if (!db_path || !db_path[0])
+        return;
+    
+    f = fopen(db_path, "r");
+    if (!f)
+        return;
+    
+    while (fgets(line, sizeof(line), f)) {
+        if (SDL_strncasecmp(line, guid_str, 32) == 0) {
+            int inv_x = 0, inv_y = 0;
+            int axis_x, axis_y;
+            
+            g_dpad_btn_up = SDL_ParseButtonMapping(line, "dpup");
+            g_dpad_btn_down = SDL_ParseButtonMapping(line, "dpdown");
+            g_dpad_btn_left = SDL_ParseButtonMapping(line, "dpleft");
+            g_dpad_btn_right = SDL_ParseButtonMapping(line, "dpright");
+            
+            axis_x = SDL_ParseAxisMapping(line, "leftx", &inv_x);
+            axis_y = SDL_ParseAxisMapping(line, "lefty", &inv_y);
+            if (axis_x >= 0)
+                g_axis_leftx = axis_x;
+            if (axis_y >= 0)
+                g_axis_lefty = axis_y;
+            break;
+        }
+    }
+    
+    fclose(f);
+}
+
+/* Rotate D-pad direction based on screen rotation */
+static void SDL_RotateDpad(SDL_Event *event)
+{
+    int rotate;
+
+    if (!event)
+        return;
+
+    rotate = SDL_GetNdsDpadRotate();
+    
+    if (rotate == 0)
+        return;
+
+    switch (event->type) {
+    case SDL_KEYDOWN:
+    case SDL_KEYUP:
+        {
+            SDL_Scancode original = event->key.keysym.scancode;
+            SDL_Scancode rotated = original;
+
+            if (original != SDL_SCANCODE_UP && original != SDL_SCANCODE_DOWN &&
+                original != SDL_SCANCODE_LEFT && original != SDL_SCANCODE_RIGHT)
+                return;
+
+            switch (rotate) {
+            case 90:
+                if (original == SDL_SCANCODE_UP) rotated = SDL_SCANCODE_LEFT;
+                else if (original == SDL_SCANCODE_DOWN) rotated = SDL_SCANCODE_RIGHT;
+                else if (original == SDL_SCANCODE_LEFT) rotated = SDL_SCANCODE_DOWN;
+                else if (original == SDL_SCANCODE_RIGHT) rotated = SDL_SCANCODE_UP;
+                break;
+            case 180:
+                if (original == SDL_SCANCODE_UP) rotated = SDL_SCANCODE_DOWN;
+                else if (original == SDL_SCANCODE_DOWN) rotated = SDL_SCANCODE_UP;
+                else if (original == SDL_SCANCODE_LEFT) rotated = SDL_SCANCODE_RIGHT;
+                else if (original == SDL_SCANCODE_RIGHT) rotated = SDL_SCANCODE_LEFT;
+                break;
+            case 270:
+                if (original == SDL_SCANCODE_UP) rotated = SDL_SCANCODE_RIGHT;
+                else if (original == SDL_SCANCODE_DOWN) rotated = SDL_SCANCODE_LEFT;
+                else if (original == SDL_SCANCODE_LEFT) rotated = SDL_SCANCODE_UP;
+                else if (original == SDL_SCANCODE_RIGHT) rotated = SDL_SCANCODE_DOWN;
+                break;
+            }
+            if (rotated != original)
+                event->key.keysym.scancode = rotated;
+        }
+        break;
+
+    case SDL_JOYHATMOTION:
+        {
+            /* Hat uses bitmask: UP=0x01, RIGHT=0x02, DOWN=0x04, LEFT=0x08 */
+            Uint8 original = event->jhat.value;
+            Uint8 rotated = 0;
+
+            if (original == SDL_HAT_CENTERED)
+                return;
+
+            switch (rotate) {
+            case 90:
+                if (original & SDL_HAT_UP) rotated |= SDL_HAT_LEFT;
+                if (original & SDL_HAT_DOWN) rotated |= SDL_HAT_RIGHT;
+                if (original & SDL_HAT_LEFT) rotated |= SDL_HAT_DOWN;
+                if (original & SDL_HAT_RIGHT) rotated |= SDL_HAT_UP;
+                break;
+            case 180:
+                if (original & SDL_HAT_UP) rotated |= SDL_HAT_DOWN;
+                if (original & SDL_HAT_DOWN) rotated |= SDL_HAT_UP;
+                if (original & SDL_HAT_LEFT) rotated |= SDL_HAT_RIGHT;
+                if (original & SDL_HAT_RIGHT) rotated |= SDL_HAT_LEFT;
+                break;
+            case 270:
+                if (original & SDL_HAT_UP) rotated |= SDL_HAT_RIGHT;
+                if (original & SDL_HAT_DOWN) rotated |= SDL_HAT_LEFT;
+                if (original & SDL_HAT_LEFT) rotated |= SDL_HAT_UP;
+                if (original & SDL_HAT_RIGHT) rotated |= SDL_HAT_DOWN;
+                break;
+            default:
+                rotated = original;
+                break;
+            }
+            event->jhat.value = rotated;
+        }
+        break;
+
+    case SDL_JOYAXISMOTION:
+        {
+            Uint8 axis = event->jaxis.axis;
+            Sint16 value = event->jaxis.value;
+            
+            if (!g_dpad_initialized)
+                SDL_LoadDpadMappings(event->jaxis.which);
+
+            if (axis != g_axis_leftx && axis != g_axis_lefty)
+                return;
+
+            switch (rotate) {
+            case 90:
+                if (axis == g_axis_leftx) {
+                    event->jaxis.axis = g_axis_lefty;
+                    event->jaxis.value = (value == -32768) ? 32767 : -value;
+                } else {
+                    event->jaxis.axis = g_axis_leftx;
+                }
+                break;
+            case 180:
+                event->jaxis.value = (value == -32768) ? 32767 : -value;
+                break;
+            case 270:
+                if (axis == g_axis_leftx) {
+                    event->jaxis.axis = g_axis_lefty;
+                } else {
+                    event->jaxis.axis = g_axis_leftx;
+                    event->jaxis.value = (value == -32768) ? 32767 : -value;
+                }
+                break;
+            }
+        }
+        break;
+
+    case SDL_CONTROLLERAXISMOTION:
+        {
+            Uint8 axis = event->caxis.axis;
+            Sint16 value = event->caxis.value;
+
+            if (axis != SDL_CONTROLLER_AXIS_LEFTX && axis != SDL_CONTROLLER_AXIS_LEFTY)
+                return;
+
+            switch (rotate) {
+            case 90:
+                if (axis == SDL_CONTROLLER_AXIS_LEFTX) {
+                    event->caxis.axis = SDL_CONTROLLER_AXIS_LEFTY;
+                    event->caxis.value = (value == -32768) ? 32767 : -value;
+                } else {
+                    event->caxis.axis = SDL_CONTROLLER_AXIS_LEFTX;
+                }
+                break;
+            case 180:
+                event->caxis.value = (value == -32768) ? 32767 : -value;
+                break;
+            case 270:
+                if (axis == SDL_CONTROLLER_AXIS_LEFTX) {
+                    event->caxis.axis = SDL_CONTROLLER_AXIS_LEFTY;
+                } else {
+                    event->caxis.axis = SDL_CONTROLLER_AXIS_LEFTX;
+                    event->caxis.value = (value == -32768) ? 32767 : -value;
+                }
+                break;
+            }
+        }
+        break;
+
+    case SDL_CONTROLLERBUTTONDOWN:
+    case SDL_CONTROLLERBUTTONUP:
+        {
+            Uint8 original = event->cbutton.button;
+            Uint8 rotated = original;
+
+            if (original != SDL_CONTROLLER_BUTTON_DPAD_UP &&
+                original != SDL_CONTROLLER_BUTTON_DPAD_DOWN &&
+                original != SDL_CONTROLLER_BUTTON_DPAD_LEFT &&
+                original != SDL_CONTROLLER_BUTTON_DPAD_RIGHT)
+                return;
+
+            switch (rotate) {
+            case 90:
+                if (original == SDL_CONTROLLER_BUTTON_DPAD_UP) rotated = SDL_CONTROLLER_BUTTON_DPAD_LEFT;
+                else if (original == SDL_CONTROLLER_BUTTON_DPAD_DOWN) rotated = SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
+                else if (original == SDL_CONTROLLER_BUTTON_DPAD_LEFT) rotated = SDL_CONTROLLER_BUTTON_DPAD_DOWN;
+                else if (original == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) rotated = SDL_CONTROLLER_BUTTON_DPAD_UP;
+                break;
+            case 180:
+                if (original == SDL_CONTROLLER_BUTTON_DPAD_UP) rotated = SDL_CONTROLLER_BUTTON_DPAD_DOWN;
+                else if (original == SDL_CONTROLLER_BUTTON_DPAD_DOWN) rotated = SDL_CONTROLLER_BUTTON_DPAD_UP;
+                else if (original == SDL_CONTROLLER_BUTTON_DPAD_LEFT) rotated = SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
+                else if (original == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) rotated = SDL_CONTROLLER_BUTTON_DPAD_LEFT;
+                break;
+            case 270:
+                if (original == SDL_CONTROLLER_BUTTON_DPAD_UP) rotated = SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
+                else if (original == SDL_CONTROLLER_BUTTON_DPAD_DOWN) rotated = SDL_CONTROLLER_BUTTON_DPAD_LEFT;
+                else if (original == SDL_CONTROLLER_BUTTON_DPAD_LEFT) rotated = SDL_CONTROLLER_BUTTON_DPAD_UP;
+                else if (original == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) rotated = SDL_CONTROLLER_BUTTON_DPAD_DOWN;
+                break;
+            }
+            if (rotated != original)
+                event->cbutton.button = rotated;
+        }
+        break;
+
+    case SDL_JOYBUTTONDOWN:
+    case SDL_JOYBUTTONUP:
+        {
+            Uint8 btn = event->jbutton.button;
+            Uint8 new_btn = btn;
+            
+            /* Load mappings on first button event */
+            if (!g_dpad_initialized) {
+                SDL_LoadDpadMappings(event->jbutton.which);
+            }
+            
+            /* Check if this button is a D-pad button */
+            if (btn != g_dpad_btn_up && btn != g_dpad_btn_down && 
+                btn != g_dpad_btn_left && btn != g_dpad_btn_right)
+                return;
+            
+            switch (rotate) {
+            case 90:
+                if (btn == g_dpad_btn_up) new_btn = g_dpad_btn_left;
+                else if (btn == g_dpad_btn_down) new_btn = g_dpad_btn_right;
+                else if (btn == g_dpad_btn_left) new_btn = g_dpad_btn_down;
+                else if (btn == g_dpad_btn_right) new_btn = g_dpad_btn_up;
+                break;
+            case 180:
+                if (btn == g_dpad_btn_up) new_btn = g_dpad_btn_down;
+                else if (btn == g_dpad_btn_down) new_btn = g_dpad_btn_up;
+                else if (btn == g_dpad_btn_left) new_btn = g_dpad_btn_right;
+                else if (btn == g_dpad_btn_right) new_btn = g_dpad_btn_left;
+                break;
+            case 270:
+                if (btn == g_dpad_btn_up) new_btn = g_dpad_btn_right;
+                else if (btn == g_dpad_btn_down) new_btn = g_dpad_btn_left;
+                else if (btn == g_dpad_btn_left) new_btn = g_dpad_btn_up;
+                else if (btn == g_dpad_btn_right) new_btn = g_dpad_btn_down;
+                break;
+            }
+            if (new_btn != btn)
+                event->jbutton.button = new_btn;
+        }
+        break;
+    }
+}
+
 int SDL_PollEvent(SDL_Event *event)
 {
-    return SDL_WaitEventTimeout(event, 0);
+    int result = SDL_WaitEventTimeout(event, 0);
+    if (result == 1 && event)
+        SDL_RotateDpad(event);
+    return result;
 }
 
 static Sint16 SDL_events_get_polling_interval(void)

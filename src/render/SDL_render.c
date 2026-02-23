@@ -722,6 +722,13 @@ static struct {
     .position = NDS_POS_TOP_RIGHT,  /* Default: top-right corner */
 };
 
+/* Getter function for D-pad rotation (called from SDL_events.c) */
+int SDL_GetNdsDpadRotate(void)
+{
+    if (disp_mode == DISP_MODE_H || disp_mode == DISP_MODE_V)
+        return nds_disp_resize_used[DISP_MODE_H].rotate;
+    return 0;
+}
 
 /* OpenGL ES function pointers and types for direct overlay rendering */
 typedef unsigned int GLenum;
@@ -2378,7 +2385,7 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
                 nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
                 nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
                 nds_settings_save_mode(nds_json_layouts.current);
-                printf("Layout switched to %d/%d\n", nds_json_layouts.current, nds_json_layouts.count);
+                printf("Layout switched to %d/%d (rotate=%d)\n", nds_json_layouts.current, nds_json_layouts.count, nds_disp_resize_used[DISP_MODE_H].rotate);
             }
             break;
         case SDL_SCANCODE_DOWN:
@@ -2390,7 +2397,7 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
                 nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
                 nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
                 nds_settings_save_mode(nds_json_layouts.current);
-                printf("Layout switched to %d/%d\n", nds_json_layouts.current, nds_json_layouts.count);
+                printf("Layout switched to %d/%d (rotate=%d)\n", nds_json_layouts.current, nds_json_layouts.count, nds_disp_resize_used[DISP_MODE_H].rotate);
             }
             break;
         case SDL_SCANCODE_LEFT:
