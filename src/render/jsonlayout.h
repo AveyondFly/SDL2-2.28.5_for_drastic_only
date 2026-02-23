@@ -36,6 +36,8 @@ int nds_settings_load_position(void);
 void nds_settings_save_position(int position);
 int nds_settings_load_theme(void);
 void nds_settings_save_theme(int theme);
+int nds_settings_load_pixel_filter(void);
+void nds_settings_save_pixel_filter(int pixel_filter);
 
 /* Theme functions */
 void nds_layout_set_theme(int theme);

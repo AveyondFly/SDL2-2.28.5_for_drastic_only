@@ -722,6 +722,11 @@ static struct {
     .position = NDS_POS_TOP_RIGHT,  /* Default: top-right corner */
 };
 
+/* Pixel filter: 1=nearest (sharp pixels), 0=linear (smooth/blur) */
+static int nds_pixel_filter = 1;
+static int nds_pixel_filter_dirty = 4;     /* Counter for SDL textures */
+static int nds_pixel_filter_gl_dirty = 1;  /* Flag for GL overlay texture */
+
 /* Getter function for D-pad rotation (called from SDL_events.c) */
 int SDL_GetNdsDpadRotate(void)
 {
@@ -973,6 +978,14 @@ static void nds_overlay_gl_render(SDL_Texture *texture, const SDL_Rect *srcrect,
 	if (SDL_GL_BindTexture(texture, &texw, &texh) != 0) {
 		nds_gl.UseProgram(saved_program);
 		return;
+	}
+
+	/* Apply pixel filter setting (only when changed) */
+	if (nds_pixel_filter_gl_dirty) {
+		GLenum filter = nds_pixel_filter ? GL_NEAREST : GL_LINEAR;
+		nds_gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+		nds_gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+		nds_pixel_filter_gl_dirty = 0;
 	}
 
 	/* Set viewport to full screen */
@@ -1506,6 +1519,14 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 			int saved_position = nds_settings_load_position();
 			if (saved_position >= 0 && saved_position < NDS_POS_MAX) {
 				nds_overlay.position = (Uint8)saved_position;
+			}
+		}
+
+		/* Load saved pixel_filter from settings.json */
+		{
+			int saved_pixel_filter = nds_settings_load_pixel_filter();
+			if (saved_pixel_filter >= 0) {
+				nds_pixel_filter = saved_pixel_filter ? 1 : 0;
 			}
 		}
 
@@ -2345,7 +2366,7 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
             nds_settings_save_alpha(nds_overlay.alpha);
             printf("Alpha: %d\n", nds_overlay.alpha);
             break;
-        case SDL_SCANCODE_P:
+        case SDL_SCANCODE_R:
             /* Decrease alpha (more transparent), wrap around */
             /* Only allowed in LAYOUT_TYPE_TRANSPARENT mode, and not in rotate mode */
             if (nds_disp_resize_used[DISP_MODE_H].type != LAYOUT_TYPE_TRANSPARENT)
@@ -2360,6 +2381,14 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
                 nds_overlay.alpha = NDS_ALPHA_MIN;
             nds_settings_save_alpha(nds_overlay.alpha);
             printf("Alpha: %d\n", nds_overlay.alpha);
+            break;
+        case SDL_SCANCODE_P:
+            /* Toggle pixel filter (nearest/linear) */
+            nds_pixel_filter = !nds_pixel_filter;
+            nds_pixel_filter_dirty = 4;     /* Apply to SDL textures */
+            nds_pixel_filter_gl_dirty = 1;  /* Apply to GL overlay */
+            nds_settings_save_pixel_filter(nds_pixel_filter);
+            printf("Pixel filter: %s\n", nds_pixel_filter ? "Pixel" : "Blur");
             break;
         case SDL_SCANCODE_Y:
             /* Cycle transparent screen position (TR -> TL -> BL -> BR -> TR) */
@@ -6193,6 +6222,12 @@ static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
 	int rect_idx;
 	int ret;
 	int offset_x = 0, offset_y = 0;
+
+	/* Apply pixel filter to NDS screen textures (not pointer), only when changed */
+	if (!nds_tex_is_pointer(texture) && nds_pixel_filter_dirty > 0) {
+		SDL_SetTextureScaleMode(texture, nds_pixel_filter ? SDL_ScaleModeNearest : SDL_ScaleModeLinear);
+		nds_pixel_filter_dirty--;
+	}
 
 	if (disp_mode == DISP_MODE_MENU) {
 		return process_drastic_menu(renderer, texture, &cur_res->menu_dst_rect);

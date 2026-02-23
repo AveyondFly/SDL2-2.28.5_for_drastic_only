@@ -411,3 +411,46 @@ void nds_settings_save_theme(int theme)
 
     json_object_put(jfile);
 }
+
+int nds_settings_load_pixel_filter(void)
+{
+    json_object *jfile, *jval;
+    int pixel_filter = -1;
+
+    if (g_settings_path[0] == '\0')
+        return -1;
+
+    jfile = json_object_from_file(g_settings_path);
+    if (!jfile)
+        return -1;
+
+    if (json_object_object_get_ex(jfile, "pixel_filter", &jval))
+        pixel_filter = json_object_get_int(jval);
+
+    json_object_put(jfile);
+    return pixel_filter;
+}
+
+void nds_settings_save_pixel_filter(int pixel_filter)
+{
+    json_object *jfile, *jval;
+
+    if (g_settings_path[0] == '\0')
+        return;
+
+    jfile = json_object_from_file(g_settings_path);
+    if (!jfile) {
+        jfile = json_object_new_object();
+        if (!jfile)
+            return;
+    }
+
+    json_object_object_del(jfile, "pixel_filter");
+    jval = json_object_new_int(pixel_filter);
+    json_object_object_add(jfile, "pixel_filter", jval);
+
+    if (json_object_to_file(g_settings_path, jfile) < 0)
+        printf("Failed to save settings to %s\n", g_settings_path);
+
+    json_object_put(jfile);
+}
