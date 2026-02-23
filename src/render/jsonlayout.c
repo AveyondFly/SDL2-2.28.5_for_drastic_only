@@ -288,6 +288,7 @@ int nds_settings_load_alpha(void)
 void nds_settings_save_alpha(int alpha)
 {
     json_object *jfile, *jval;
+    int adv_alpha;
 
     if (g_settings_path[0] == '\0')
         return;
@@ -299,14 +300,20 @@ void nds_settings_save_alpha(int alpha)
             return;
     }
 
+    /* Convert rock format (50-255) to adv format (0-7) for compatibility */
+    /* adv_val = (255 - rock_alpha) / 29, clamped to 0-7 */
+    adv_alpha = (255 - alpha) / 29;
+    if (adv_alpha < 0) adv_alpha = 0;
+    if (adv_alpha > 7) adv_alpha = 7;
+
     json_object_object_del(jfile, "alpha");
-    jval = json_object_new_int(alpha);
+    jval = json_object_new_int(adv_alpha);
     json_object_object_add(jfile, "alpha", jval);
 
     if (json_object_to_file(g_settings_path, jfile) < 0)
         printf("Failed to save settings to %s\n", g_settings_path);
     else
-        printf("Saved alpha=%d to %s\n", alpha, g_settings_path);
+        printf("Saved alpha=%d (adv format) to %s\n", adv_alpha, g_settings_path);
 
     json_object_put(jfile);
 }

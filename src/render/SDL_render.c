@@ -2323,13 +2323,15 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
         /* NDS overlay hotkeys */
         switch (event->key.keysym.scancode) {
         case SDL_SCANCODE_Z:
-            /* Increase alpha (more opaque / towards disabled) */
+            /* Increase alpha (more opaque / towards disabled), wrap around */
             /* Only allowed in LAYOUT_TYPE_TRANSPARENT mode, and not in rotate mode */
             if (nds_disp_resize_used[DISP_MODE_H].type != LAYOUT_TYPE_TRANSPARENT)
                 break;
             if (nds_disp_resize_used[DISP_MODE_H].rotate != 0)
                 break;
-            if (nds_overlay.alpha <= NDS_ALPHA_MAX - NDS_ALPHA_STEP)
+            if (nds_overlay.alpha >= NDS_ALPHA_MAX)
+                nds_overlay.alpha = NDS_ALPHA_MIN;  /* Wrap to most transparent */
+            else if (nds_overlay.alpha <= NDS_ALPHA_MAX - NDS_ALPHA_STEP)
                 nds_overlay.alpha += NDS_ALPHA_STEP;
             else
                 nds_overlay.alpha = NDS_ALPHA_MAX;
@@ -2337,13 +2339,15 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
             printf("Alpha: %d\n", nds_overlay.alpha);
             break;
         case SDL_SCANCODE_P:
-            /* Decrease alpha (more transparent) */
+            /* Decrease alpha (more transparent), wrap around */
             /* Only allowed in LAYOUT_TYPE_TRANSPARENT mode, and not in rotate mode */
             if (nds_disp_resize_used[DISP_MODE_H].type != LAYOUT_TYPE_TRANSPARENT)
                 break;
             if (nds_disp_resize_used[DISP_MODE_H].rotate != 0)
                 break;
-            if (nds_overlay.alpha >= NDS_ALPHA_MIN + NDS_ALPHA_STEP)
+            if (nds_overlay.alpha <= NDS_ALPHA_MIN)
+                nds_overlay.alpha = NDS_ALPHA_MAX;  /* Wrap to disabled/opaque */
+            else if (nds_overlay.alpha >= NDS_ALPHA_MIN + NDS_ALPHA_STEP)
                 nds_overlay.alpha -= NDS_ALPHA_STEP;
             else
                 nds_overlay.alpha = NDS_ALPHA_MIN;
@@ -6225,12 +6229,8 @@ static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
 	/* Handle screen textures */
 	rect_idx = nds_get_screen_index(dstrect);
 
-	/* Transparent mode: only for LAYOUT_TYPE_TRANSPARENT, bottom screen with alpha, not rotated */
-	if (rect_idx == 1 && cur_res->type == LAYOUT_TYPE_TRANSPARENT &&
-	    nds_overlay.alpha < NDS_ALPHA_MAX && cur_res->rotate == 0) {
-		/* Bottom screen with transparency */
-		SDL_RenderFlush(renderer);
-
+	/* LAYOUT_TYPE_TRANSPARENT: bottom screen always uses position, with optional alpha */
+	if (rect_idx == 1 && cur_res->type == LAYOUT_TYPE_TRANSPARENT && cur_res->rotate == 0) {
 		int screen_w, screen_h;
 		SDL_GetRendererOutputSize(renderer, &screen_w, &screen_h);
 
@@ -6255,9 +6255,18 @@ static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
 			break;
 		}
 
-		float alpha_f = nds_overlay.alpha / 255.0f;
-		nds_overlay_gl_render(texture, srcrect, &dst_rect,
-		                      alpha_f, screen_w, screen_h);
+		if (nds_overlay.alpha < NDS_ALPHA_MAX) {
+			/* Transparent rendering with GL */
+			SDL_RenderFlush(renderer);
+			float alpha_f = nds_overlay.alpha / 255.0f;
+			nds_overlay_gl_render(texture, srcrect, &dst_rect,
+			                      alpha_f, screen_w, screen_h);
+		} else {
+			/* Opaque rendering at position (no transparency) */
+			SDL_FRect dst_frect = { (float)dst_rect.x, (float)dst_rect.y,
+			                        (float)dst_rect.w, (float)dst_rect.h };
+			ret = SDL_RenderCopyF(renderer, texture, srcrect, &dst_frect);
+		}
 	} else {
 		/* Normal rendering: top screen, non-transparent layout, or rotate mode */
 		ret = SDL_RenderCopyEx_nds(renderer, texture, cur_res->vertices[rect_idx], cur_res->rotate);
