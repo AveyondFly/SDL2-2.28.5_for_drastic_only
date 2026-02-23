@@ -43,6 +43,7 @@
 #include <sys/mman.h>
 #include <SDL2/SDL_ttf.h>
 #include <SDL2/SDL_image.h>
+#include "jsonlayout.h"
 
 /* as a courtesy to iOS apps, we don't try to draw when in the background, as
 that will crash the app. However, these apps _should_ have used
@@ -679,6 +680,14 @@ struct nds_disp_resize *res_sel = NULL;
 static uint16_t disp_mode = DISP_MODE_MAX;
 static SDL_Rect disp_rect;
 
+/* Dynamic layout from JSON */
+#define MAX_JSON_LAYOUTS 32
+static struct {
+    int count;                  /* Number of loaded layouts */
+    int current;                /* Current layout index */
+    struct nds_disp_resize layouts[MAX_JSON_LAYOUTS];
+} nds_json_layouts = {0};
+
 /* Transparent bottom screen configuration */
 #define NDS_ALPHA_STEP          25      /* Step for alpha adjustment */
 
@@ -1022,10 +1031,31 @@ static void nds_drastic_deinit()
 {
 	int i;
 
-	for (i = 0; i < DISP_TGT_MODE_MAX - 1; i++) {
-		if (res_sel[i].bg_tex)
-			SDL_DestroyTexture(res_sel[i].bg_tex);
-		res_sel[i].bg_tex = NULL;
+	/* Free layout JSON resources */
+	nds_layout_free();
+
+	/* Free hardcoded layout textures */
+	if (res_sel) {
+		for (i = 0; i < DISP_TGT_MODE_MAX - 1; i++) {
+			if (res_sel[i].bg_tex)
+				SDL_DestroyTexture(res_sel[i].bg_tex);
+			res_sel[i].bg_tex = NULL;
+		}
+	}
+
+	/* Free JSON layout textures */
+	for (i = 0; i < nds_json_layouts.count; i++) {
+		if (nds_json_layouts.layouts[i].bg_tex) {
+			SDL_DestroyTexture(nds_json_layouts.layouts[i].bg_tex);
+			nds_json_layouts.layouts[i].bg_tex = NULL;
+		}
+	}
+	nds_json_layouts.count = 0;
+	nds_json_layouts.current = 0;
+
+	/* Clear nds_disp_resize_used pointers (textures already freed above or in res_sel) */
+	for (i = 0; i < DISP_MODE_MAX; i++) {
+		nds_disp_resize_used[i].bg_tex = NULL;
 	}
 
 	/* Free menu resources */
@@ -1339,46 +1369,116 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 	else if (rect.w == 960 && rect.h == 720)
 		res_sel = disp_960x720;
 
-	if (!res_sel) {
-		printf("Unsupported output resolution.\n");
-		return;
-	}
 	disp_rect = rect;
 
-	/* Load background png if valid. Execpt menu. */
-	for (i = 0; i < DISP_TGT_MODE_MAX - 1; i++) {
-		sprintf(texpath, "%s%s", NDS_BEZELS, nds_bg_png[i]);
-		res_sel[i].bg_tex = loadBackground(texpath, mRenderer);
-	}
+	/* Reset JSON layouts */
+	nds_json_layouts.count = 0;
+	nds_json_layouts.current = 0;
 
-	/* First initialize the layouts with first 2 layouts. */
-	nds_disp_resize_used[DISP_MODE_H] = res_sel[DISP_TGT_MODE_TOP_FULL];
-	nds_disp_resize_used[DISP_MODE_V] = res_sel[DISP_TGT_MODE_V_ORI];
-	nds_disp_resize_used[DISP_MODE_H_SINGLE] = res_sel[DISP_TGT_MODE_H_SINGLE];
-	nds_disp_resize_used[DISP_MODE_H_SINGLE] = res_sel[DISP_TGT_MODE_H_SINGLE];
-	nds_disp_resize_used[DISP_MODE_MENU] = res_sel[DISP_TGT_MODE_MENU];
+	/* Set settings.json path */
+	sprintf(texpath, "%s/resources/settings.json", folder);
+	nds_settings_set_path(texpath);
 
-	/* Select the screen layout with bg texture if has. */
-	for (i = 2; i < DISP_TGT_MODE_MAX - 2; i++) {
-		/* The bg textures are ready for now. */
-		if (nds_disp_resize_used[DISP_MODE_H].bg_tex &&
-			nds_disp_resize_used[DISP_MODE_V].bg_tex)
-			break;
+	/* Try to load layout from layout.json first */
+	sprintf(texpath, "%s/resources/bg/%dx%d/layout.json", folder, rect.w, rect.h);
+	if (nds_layout_load(texpath) == 0 && nds_layout_get_count() > 0) {
+		int layout_count = nds_layout_get_count();
+		int saved_position;
+		nds_layout_t *layout;
+		const char *bg_path;
 
-		/* If the candicate layout does not have bg_tex, skip that layout as low priority. */
-		if (!res_sel[i].bg_tex)
-			continue;
+		printf("Using layout.json with %d layouts\n", layout_count);
 
-		/* Replace no bg_tex pre-layout if candicate layouts have bg_tex. */
-		if (!nds_disp_resize_used[DISP_MODE_H].bg_tex &&
-			!nds_disp_resize_used[DISP_MODE_V].bg_tex)
-			nds_disp_resize_used[DISP_MODE_H] = res_sel[i];
-		else if (nds_disp_resize_used[DISP_MODE_H].bg_tex &&
-			!nds_disp_resize_used[DISP_MODE_V].bg_tex)
-			nds_disp_resize_used[DISP_MODE_V] = res_sel[i];
-		else if (!nds_disp_resize_used[DISP_MODE_H].bg_tex &&
-			nds_disp_resize_used[DISP_MODE_V].bg_tex)
-			nds_disp_resize_used[DISP_MODE_H] = res_sel[i];
+		/* Load all layouts from JSON into nds_json_layouts */
+		for (i = 0; i < layout_count && i < MAX_JSON_LAYOUTS; i++) {
+			layout = nds_layout_get(i);
+			if (!layout)
+				continue;
+
+			/* Copy screen rects */
+			nds_json_layouts.layouts[i].tgt_rect[0] = layout->screen[0];
+			nds_json_layouts.layouts[i].tgt_rect[1] = layout->screen[1];
+
+			/* Load background texture if specified */
+			bg_path = nds_layout_get_bg_path(i);
+			if (bg_path) {
+				nds_json_layouts.layouts[i].bg_tex = loadBackground((char *)bg_path, mRenderer);
+				printf("Layout %d (%s): loaded bg from %s\n", i, layout->name ? layout->name : "?", bg_path);
+			} else {
+				nds_json_layouts.layouts[i].bg_tex = NULL;
+				printf("Layout %d (%s): no background\n", i, layout->name ? layout->name : "?");
+			}
+
+			/* Calculate pointer scale for this layout */
+			nds_json_layouts.layouts[i].pointer_scale[0] = 
+				(float)nds_json_layouts.layouts[i].tgt_rect[0].w / NDS_DRASTIC_H;
+			nds_json_layouts.layouts[i].pointer_scale[1] = 
+				(float)nds_json_layouts.layouts[i].tgt_rect[1].w / NDS_DRASTIC_H;
+
+			nds_json_layouts.count++;
+		}
+
+		/* Load saved position from settings.json */
+		saved_position = nds_settings_load_position();
+		if (saved_position >= 0 && saved_position < nds_json_layouts.count) {
+			nds_json_layouts.current = saved_position;
+		}
+
+		/* Point DISP_MODE_H and DISP_MODE_V to the current JSON layout */
+		if (nds_json_layouts.count > 0) {
+			nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
+			nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
+		}
+
+		/* Setup H_SINGLE and MENU from hardcoded if available */
+		if (res_sel) {
+			nds_disp_resize_used[DISP_MODE_H_SINGLE] = res_sel[DISP_TGT_MODE_H_SINGLE];
+			nds_disp_resize_used[DISP_MODE_MENU] = res_sel[DISP_TGT_MODE_MENU];
+		}
+
+		printf("JSON layout initialized, current=%d, count=%d\n", nds_json_layouts.current, nds_json_layouts.count);
+	} else if (res_sel) {
+		/* Fallback to hardcoded layouts */
+		printf("Fallback to hardcoded layouts for %dx%d\n", rect.w, rect.h);
+
+		/* Load background png if valid. Except menu. */
+		for (i = 0; i < DISP_TGT_MODE_MAX - 1; i++) {
+			sprintf(texpath, "%s%s", NDS_BEZELS, nds_bg_png[i]);
+			res_sel[i].bg_tex = loadBackground(texpath, mRenderer);
+		}
+
+		/* First initialize the layouts with first 2 layouts. */
+		nds_disp_resize_used[DISP_MODE_H] = res_sel[DISP_TGT_MODE_TOP_FULL];
+		nds_disp_resize_used[DISP_MODE_V] = res_sel[DISP_TGT_MODE_V_ORI];
+		nds_disp_resize_used[DISP_MODE_H_SINGLE] = res_sel[DISP_TGT_MODE_H_SINGLE];
+		nds_disp_resize_used[DISP_MODE_H_SINGLE] = res_sel[DISP_TGT_MODE_H_SINGLE];
+		nds_disp_resize_used[DISP_MODE_MENU] = res_sel[DISP_TGT_MODE_MENU];
+
+		/* Select the screen layout with bg texture if has. */
+		for (i = 2; i < DISP_TGT_MODE_MAX - 2; i++) {
+			/* The bg textures are ready for now. */
+			if (nds_disp_resize_used[DISP_MODE_H].bg_tex &&
+				nds_disp_resize_used[DISP_MODE_V].bg_tex)
+				break;
+
+			/* If the candicate layout does not have bg_tex, skip that layout as low priority. */
+			if (!res_sel[i].bg_tex)
+				continue;
+
+			/* Replace no bg_tex pre-layout if candicate layouts have bg_tex. */
+			if (!nds_disp_resize_used[DISP_MODE_H].bg_tex &&
+				!nds_disp_resize_used[DISP_MODE_V].bg_tex)
+				nds_disp_resize_used[DISP_MODE_H] = res_sel[i];
+			else if (nds_disp_resize_used[DISP_MODE_H].bg_tex &&
+				!nds_disp_resize_used[DISP_MODE_V].bg_tex)
+				nds_disp_resize_used[DISP_MODE_V] = res_sel[i];
+			else if (!nds_disp_resize_used[DISP_MODE_H].bg_tex &&
+				nds_disp_resize_used[DISP_MODE_V].bg_tex)
+				nds_disp_resize_used[DISP_MODE_H] = res_sel[i];
+		}
+	} else {
+		printf("No layout configuration available for %dx%d\n", rect.w, rect.h);
+		return;
 	}
 
 	/* Start generate the pointer scale value. */
@@ -2161,6 +2261,31 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
                 nds_overlay.alpha -= NDS_ALPHA_STEP;
             else
                 nds_overlay.alpha = 0;
+            break;
+        case SDL_SCANCODE_UP:
+            /* Switch to previous layout */
+            if (nds_json_layouts.count > 0) {
+                if (nds_json_layouts.current > 0)
+                    nds_json_layouts.current--;
+                else
+                    nds_json_layouts.current = nds_json_layouts.count - 1;
+                nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
+                nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
+                nds_settings_save_position(nds_json_layouts.current);
+                printf("Layout switched to %d/%d\n", nds_json_layouts.current, nds_json_layouts.count);
+            }
+            break;
+        case SDL_SCANCODE_DOWN:
+            /* Switch to next layout */
+            if (nds_json_layouts.count > 0) {
+                nds_json_layouts.current++;
+                if (nds_json_layouts.current >= nds_json_layouts.count)
+                    nds_json_layouts.current = 0;
+                nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
+                nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
+                nds_settings_save_position(nds_json_layouts.current);
+                printf("Layout switched to %d/%d\n", nds_json_layouts.current, nds_json_layouts.count);
+            }
             break;
         default:
             break;
