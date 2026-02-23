@@ -211,3 +211,50 @@ void nds_settings_save_position(int position)
 
     json_object_put(jfile);
 }
+
+int nds_settings_load_alpha(void)
+{
+    json_object *jfile, *jval;
+    int alpha = -1;
+
+    if (g_settings_path[0] == '\0')
+        return -1;
+
+    jfile = json_object_from_file(g_settings_path);
+    if (!jfile)
+        return -1;
+
+    if (json_object_object_get_ex(jfile, "alpha", &jval))
+        alpha = json_object_get_int(jval);
+
+    json_object_put(jfile);
+    if (alpha >= 0)
+        printf("Loaded alpha=%d from %s\n", alpha, g_settings_path);
+    return alpha;
+}
+
+void nds_settings_save_alpha(int alpha)
+{
+    json_object *jfile, *jval;
+
+    if (g_settings_path[0] == '\0')
+        return;
+
+    jfile = json_object_from_file(g_settings_path);
+    if (!jfile) {
+        jfile = json_object_new_object();
+        if (!jfile)
+            return;
+    }
+
+    json_object_object_del(jfile, "alpha");
+    jval = json_object_new_int(alpha);
+    json_object_object_add(jfile, "alpha", jval);
+
+    if (json_object_to_file(g_settings_path, jfile) < 0)
+        printf("Failed to save settings to %s\n", g_settings_path);
+    else
+        printf("Saved alpha=%d to %s\n", alpha, g_settings_path);
+
+    json_object_put(jfile);
+}

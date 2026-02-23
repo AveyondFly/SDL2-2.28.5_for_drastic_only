@@ -1424,6 +1424,14 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 			nds_json_layouts.current = saved_position;
 		}
 
+		/* Load saved alpha from settings.json */
+		{
+			int saved_alpha = nds_settings_load_alpha();
+			if (saved_alpha >= 0 && saved_alpha <= 255) {
+				nds_overlay.alpha = (Uint8)saved_alpha;
+			}
+		}
+
 		/* Point DISP_MODE_H and DISP_MODE_V to the current JSON layout */
 		if (nds_json_layouts.count > 0) {
 			nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
@@ -2248,12 +2256,13 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
             /* Toggle overlay */
             nds_overlay.enabled = !nds_overlay.enabled;
             break;
-        case SDL_SCANCODE_N:
+        case SDL_SCANCODE_Z:
             /* Increase alpha (more opaque) */
             if (nds_overlay.alpha <= 255 - NDS_ALPHA_STEP)
                 nds_overlay.alpha += NDS_ALPHA_STEP;
             else
                 nds_overlay.alpha = 255;
+            nds_settings_save_alpha(nds_overlay.alpha);
             break;
         case SDL_SCANCODE_P:
             /* Decrease alpha (more transparent) */
@@ -2261,6 +2270,7 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
                 nds_overlay.alpha -= NDS_ALPHA_STEP;
             else
                 nds_overlay.alpha = 0;
+            nds_settings_save_alpha(nds_overlay.alpha);
             break;
         case SDL_SCANCODE_UP:
             /* Switch to previous layout */
