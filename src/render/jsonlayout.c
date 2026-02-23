@@ -2,11 +2,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <json-c/json.h>
 
 static nds_theme_t g_theme = {0};
 static char g_layout_dir[256] = {0};
 static char g_settings_path[256] = {0};
+static int g_current_theme = 1;  /* Default theme index (1-based directory name) */
+static int g_theme_count = 1;    /* Total number of theme directories */
 
 int nds_layout_load(const char *json_path)
 {
@@ -153,9 +157,52 @@ const char *nds_layout_get_bg_path(int index)
     if (!layout->bg || strlen(layout->bg) == 0)
         return NULL;
 
-    /* Background images are in subdirectory "1" (hardcoded theme index) */
-    snprintf(path_buf, sizeof(path_buf), "%s1/%s", g_layout_dir, layout->bg);
+    /* Background images are in subdirectory based on current theme */
+    snprintf(path_buf, sizeof(path_buf), "%s%d/%s", g_layout_dir, g_current_theme, layout->bg);
     return path_buf;
+}
+
+void nds_layout_set_theme(int theme)
+{
+    if (theme >= 1 && theme <= g_theme_count)
+        g_current_theme = theme;
+}
+
+int nds_layout_get_theme(void)
+{
+    return g_current_theme;
+}
+
+int nds_layout_get_theme_count(void)
+{
+    return g_theme_count;
+}
+
+void nds_layout_detect_themes(void)
+{
+    char path_buf[512];
+    struct stat st;
+    int i;
+
+    if (g_layout_dir[0] == '\0') {
+        g_theme_count = 1;
+        return;
+    }
+
+    g_theme_count = 0;
+    for (i = 1; i <= 99; i++) {
+        snprintf(path_buf, sizeof(path_buf), "%s%d", g_layout_dir, i);
+        if (stat(path_buf, &st) == 0 && S_ISDIR(st.st_mode)) {
+            g_theme_count = i;
+        } else {
+            break;
+        }
+    }
+
+    if (g_theme_count == 0)
+        g_theme_count = 1;
+
+    printf("Detected %d theme directories in %s\n", g_theme_count, g_layout_dir);
 }
 
 void nds_settings_set_path(const char *path)
@@ -255,6 +302,53 @@ void nds_settings_save_alpha(int alpha)
         printf("Failed to save settings to %s\n", g_settings_path);
     else
         printf("Saved alpha=%d to %s\n", alpha, g_settings_path);
+
+    json_object_put(jfile);
+}
+
+int nds_settings_load_theme(void)
+{
+    json_object *jfile, *jval;
+    int theme = -1;
+
+    if (g_settings_path[0] == '\0')
+        return -1;
+
+    jfile = json_object_from_file(g_settings_path);
+    if (!jfile)
+        return -1;
+
+    if (json_object_object_get_ex(jfile, "theme", &jval))
+        theme = json_object_get_int(jval);
+
+    json_object_put(jfile);
+    if (theme >= 1)
+        printf("Loaded theme=%d from %s\n", theme, g_settings_path);
+    return theme;
+}
+
+void nds_settings_save_theme(int theme)
+{
+    json_object *jfile, *jval;
+
+    if (g_settings_path[0] == '\0')
+        return;
+
+    jfile = json_object_from_file(g_settings_path);
+    if (!jfile) {
+        jfile = json_object_new_object();
+        if (!jfile)
+            return;
+    }
+
+    json_object_object_del(jfile, "theme");
+    jval = json_object_new_int(theme);
+    json_object_object_add(jfile, "theme", jval);
+
+    if (json_object_to_file(g_settings_path, jfile) < 0)
+        printf("Failed to save settings to %s\n", g_settings_path);
+    else
+        printf("Saved theme=%d to %s\n", theme, g_settings_path);
 
     json_object_put(jfile);
 }

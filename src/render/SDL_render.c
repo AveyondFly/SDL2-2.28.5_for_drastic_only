@@ -1384,10 +1384,20 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 	if (nds_layout_load(texpath) == 0 && nds_layout_get_count() > 0) {
 		int layout_count = nds_layout_get_count();
 		int saved_position;
+		int saved_theme;
 		nds_layout_t *layout;
 		const char *bg_path;
 
 		printf("Using layout.json with %d layouts\n", layout_count);
+
+		/* Detect available theme directories */
+		nds_layout_detect_themes();
+
+		/* Load saved theme from settings.json before loading backgrounds */
+		saved_theme = nds_settings_load_theme();
+		if (saved_theme >= 1 && saved_theme <= nds_layout_get_theme_count()) {
+			nds_layout_set_theme(saved_theme);
+		}
 
 		/* Load all layouts from JSON into nds_json_layouts */
 		for (i = 0; i < layout_count && i < MAX_JSON_LAYOUTS; i++) {
@@ -2295,6 +2305,46 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
                 nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
                 nds_settings_save_position(nds_json_layouts.current);
                 printf("Layout switched to %d/%d\n", nds_json_layouts.current, nds_json_layouts.count);
+            }
+            break;
+        case SDL_SCANCODE_LEFT:
+        case SDL_SCANCODE_RIGHT:
+            /* Switch theme (reload background images from different theme folder) */
+            if (nds_json_layouts.count > 0) {
+                int current_theme = nds_layout_get_theme();
+                int theme_count = nds_layout_get_theme_count();
+                int new_theme;
+                int i;
+                const char *bg_path;
+
+                if (event->key.keysym.scancode == SDL_SCANCODE_LEFT) {
+                    new_theme = (current_theme > 1) ? current_theme - 1 : theme_count;
+                } else {
+                    new_theme = (current_theme < theme_count) ? current_theme + 1 : 1;
+                }
+
+                if (new_theme != current_theme) {
+                    nds_layout_set_theme(new_theme);
+
+                    /* Reload all background textures with new theme */
+                    for (i = 0; i < nds_json_layouts.count; i++) {
+                        if (nds_json_layouts.layouts[i].bg_tex) {
+                            SDL_DestroyTexture(nds_json_layouts.layouts[i].bg_tex);
+                            nds_json_layouts.layouts[i].bg_tex = NULL;
+                        }
+                        bg_path = nds_layout_get_bg_path(i);
+                        if (bg_path) {
+                            nds_json_layouts.layouts[i].bg_tex = loadBackground((char *)bg_path, renderer);
+                        }
+                    }
+
+                    /* Update current display mode's bg_tex */
+                    nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
+                    nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
+
+                    nds_settings_save_theme(new_theme);
+                    printf("Theme switched to %d/%d\n", new_theme, theme_count);
+                }
             }
             break;
         default:

@@ -32,5 +32,13 @@ int nds_settings_load_position(void);
 void nds_settings_save_position(int position);
 int nds_settings_load_alpha(void);
 void nds_settings_save_alpha(int alpha);
+int nds_settings_load_theme(void);
+void nds_settings_save_theme(int theme);
+
+/* Theme functions */
+void nds_layout_set_theme(int theme);
+int nds_layout_get_theme(void);
+int nds_layout_get_theme_count(void);
+void nds_layout_detect_themes(void);
 
 #endif /* _JSONLAYOUT_H */
