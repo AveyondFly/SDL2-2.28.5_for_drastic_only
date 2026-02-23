@@ -32,6 +32,8 @@ int nds_settings_load_mode(void);
 void nds_settings_save_mode(int mode);
 int nds_settings_load_alpha(void);
 void nds_settings_save_alpha(int alpha);
+int nds_settings_load_position(void);
+void nds_settings_save_position(int position);
 int nds_settings_load_theme(void);
 void nds_settings_save_theme(int theme);
 
