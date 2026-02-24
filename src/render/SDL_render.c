@@ -1536,10 +1536,81 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 			nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
 		}
 
-		/* Setup H_SINGLE and MENU from hardcoded if available */
+		/* Setup H_SINGLE: prefer type=4 layout from JSON (largest), fallback to hardcoded or default */
+		{
+			int best_idx = -1;
+			int best_area = 0;
+			for (i = 0; i < nds_json_layouts.count; i++) {
+				if (nds_json_layouts.layouts[i].type == LAYOUT_TYPE_SINGLE) {
+					/* Find the larger screen rect */
+					SDL_Rect *r0 = &nds_json_layouts.layouts[i].tgt_rect[0];
+					SDL_Rect *r1 = &nds_json_layouts.layouts[i].tgt_rect[1];
+					int area0 = r0->w * r0->h;
+					int area1 = r1->w * r1->h;
+					int area = (area0 > area1) ? area0 : area1;
+					if (area > best_area) {
+						best_area = area;
+						best_idx = i;
+					}
+				}
+			}
+			if (best_idx >= 0) {
+				SDL_Rect *r0, *r1;
+				nds_disp_resize_used[DISP_MODE_H_SINGLE] = nds_json_layouts.layouts[best_idx];
+				r0 = &nds_disp_resize_used[DISP_MODE_H_SINGLE].tgt_rect[0];
+				r1 = &nds_disp_resize_used[DISP_MODE_H_SINGLE].tgt_rect[1];
+
+				/* Use the larger screen, sync to screen[0] if needed */
+				if (r1->w * r1->h > r0->w * r0->h) {
+					*r0 = *r1;
+					memset(r1, 0, sizeof(SDL_Rect));
+					printf("Found SINGLE layout at index %d, synced screen1 to screen0\n", best_idx);
+				} else {
+					printf("Found SINGLE layout at index %d\n", best_idx);
+				}
+
+				/* Adjust to maintain 4:3 aspect ratio if needed */
+				{
+					int orig_w = r0->w, orig_h = r0->h;
+					int new_w, new_h;
+
+					if (orig_w * NDS_DRASTIC_V != orig_h * NDS_DRASTIC_H) {
+						if (orig_w * NDS_DRASTIC_V > orig_h * NDS_DRASTIC_H) {
+							new_h = orig_h;
+							new_w = orig_h * NDS_DRASTIC_H / NDS_DRASTIC_V;
+						} else {
+							new_w = orig_w;
+							new_h = orig_w * NDS_DRASTIC_V / NDS_DRASTIC_H;
+						}
+						r0->x += (orig_w - new_w) / 2;
+						r0->y += (orig_h - new_h) / 2;
+						r0->w = new_w;
+						r0->h = new_h;
+						printf("Adjusted SINGLE to 4:3: %dx%d -> %dx%d\n", orig_w, orig_h, new_w, new_h);
+					}
+					nds_disp_resize_used[DISP_MODE_H_SINGLE].pointer_scale[0] = (float)r0->w / NDS_DRASTIC_H;
+				}
+			} else if (res_sel) {
+				nds_disp_resize_used[DISP_MODE_H_SINGLE] = res_sel[DISP_TGT_MODE_H_SINGLE];
+			} else {
+				/* Create default H_SINGLE config based on screen size */
+				int scale = rect.h / NDS_DRASTIC_V;
+				int w = NDS_DRASTIC_H * scale;
+				int h = NDS_DRASTIC_V * scale;
+				memset(&nds_disp_resize_used[DISP_MODE_H_SINGLE], 0, sizeof(struct nds_disp_resize));
+				nds_disp_resize_used[DISP_MODE_H_SINGLE].tgt_rect[0].x = (rect.w - w) / 2;
+				nds_disp_resize_used[DISP_MODE_H_SINGLE].tgt_rect[0].y = (rect.h - h) / 2;
+				nds_disp_resize_used[DISP_MODE_H_SINGLE].tgt_rect[0].w = w;
+				nds_disp_resize_used[DISP_MODE_H_SINGLE].tgt_rect[0].h = h;
+				nds_disp_resize_used[DISP_MODE_H_SINGLE].pointer_scale[0] = (float)scale;
+			}
+		}
+
+		/* Setup MENU */
 		if (res_sel) {
-			nds_disp_resize_used[DISP_MODE_H_SINGLE] = res_sel[DISP_TGT_MODE_H_SINGLE];
 			nds_disp_resize_used[DISP_MODE_MENU] = res_sel[DISP_TGT_MODE_MENU];
+		} else {
+			nds_disp_resize_used[DISP_MODE_MENU] = nds_disp_resize_used[DISP_MODE_H];
 		}
 
 		printf("JSON layout initialized, current=%d, count=%d\n", nds_json_layouts.current, nds_json_layouts.count);
@@ -1556,7 +1627,6 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 		/* First initialize the layouts with first 2 layouts. */
 		nds_disp_resize_used[DISP_MODE_H] = res_sel[DISP_TGT_MODE_TOP_FULL];
 		nds_disp_resize_used[DISP_MODE_V] = res_sel[DISP_TGT_MODE_V_ORI];
-		nds_disp_resize_used[DISP_MODE_H_SINGLE] = res_sel[DISP_TGT_MODE_H_SINGLE];
 		nds_disp_resize_used[DISP_MODE_H_SINGLE] = res_sel[DISP_TGT_MODE_H_SINGLE];
 		nds_disp_resize_used[DISP_MODE_MENU] = res_sel[DISP_TGT_MODE_MENU];
 
@@ -6243,7 +6313,12 @@ static int nds_render_copy(SDL_Renderer *renderer, SDL_Texture *texture,
 			return SDL_RenderCopyF(renderer, texture, srcrect, &dstfrect);
 		}
 
-		ret = SDL_RenderCopyEx_nds(renderer, texture, cur_res->vertices[0], cur_res->rotate);
+		/* H_SINGLE: no rotation, use simple SDL_RenderCopyF */
+		dstfrect.x = (float) cur_res->tgt_rect[0].x;
+		dstfrect.y = (float) cur_res->tgt_rect[0].y;
+		dstfrect.w = (float) cur_res->tgt_rect[0].w;
+		dstfrect.h = (float) cur_res->tgt_rect[0].h;
+		ret = SDL_RenderCopyF(renderer, texture, srcrect, &dstfrect);
 		if (unlikely(ret))
 			return ret;
 		if (cur_res->bg_tex)
