@@ -727,6 +727,30 @@ static int nds_pixel_filter = 1;
 static int nds_pixel_filter_dirty = 4;     /* Counter for SDL textures */
 static int nds_pixel_filter_gl_dirty = 1;  /* Flag for GL overlay texture */
 
+/* FPS display */
+static int nds_show_fps = 0;
+
+/* Settings menu */
+#define SETTINGS_MENU_LAYOUT    0
+#define SETTINGS_MENU_THEME     1
+#define SETTINGS_MENU_ALPHA     2
+#define SETTINGS_MENU_POSITION  3
+#define SETTINGS_MENU_PIXEL     4
+#define SETTINGS_MENU_FPS       5
+#define SETTINGS_MENU_COUNT     6
+
+static struct {
+    int visible;        /* Menu is visible */
+    int selection;      /* Current selected item (0-4) */
+    SDL_Texture *tex;   /* Menu texture */
+    int need_redraw;    /* Flag to redraw menu texture */
+    SDL_Renderer *renderer;  /* Cached renderer for theme reload */
+} nds_settings_menu = {0};
+
+/* Forward declarations for settings menu */
+static void nds_settings_menu_adjust(int item, int dir);
+static void nds_settings_menu_draw(SDL_Renderer *renderer);
+
 /* Getter function for D-pad rotation (called from SDL_events.c) */
 int SDL_GetNdsDpadRotate(void)
 {
@@ -2501,8 +2525,50 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
                 printf("Theme: %d/%d\n", new_theme, theme_count);
             }
             break;
+        case SDL_SCANCODE_M:
+            /* Toggle settings menu (only in game display modes) */
+            if (disp_mode == DISP_MODE_H || disp_mode == DISP_MODE_V || disp_mode == DISP_MODE_H_SINGLE) {
+                nds_settings_menu.visible = !nds_settings_menu.visible;
+                nds_settings_menu.need_redraw = 1;
+                if (nds_settings_menu.visible)
+                    printf("Settings menu opened\n");
+                else
+                    printf("Settings menu closed\n");
+            }
+            break;
         default:
             break;
+        }
+        
+        /* Handle settings menu navigation when visible */
+        if (nds_settings_menu.visible) {
+            switch (event->key.keysym.scancode) {
+            case SDL_SCANCODE_UP:
+                nds_settings_menu.selection--;
+                if (nds_settings_menu.selection < 0)
+                    nds_settings_menu.selection = SETTINGS_MENU_COUNT - 1;
+                nds_settings_menu.need_redraw = 1;
+                return 1;  /* Consume event */
+            case SDL_SCANCODE_DOWN:
+                nds_settings_menu.selection++;
+                if (nds_settings_menu.selection >= SETTINGS_MENU_COUNT)
+                    nds_settings_menu.selection = 0;
+                nds_settings_menu.need_redraw = 1;
+                return 1;  /* Consume event */
+            case SDL_SCANCODE_LEFT:
+                nds_settings_menu_adjust(nds_settings_menu.selection, -1);
+                return 1;  /* Consume event */
+            case SDL_SCANCODE_RIGHT:
+                nds_settings_menu_adjust(nds_settings_menu.selection, 1);
+                return 1;  /* Consume event */
+            case SDL_SCANCODE_B:
+            case SDL_SCANCODE_ESCAPE:
+                nds_settings_menu.visible = 0;
+                printf("Settings menu closed\n");
+                return 1;  /* Consume event */
+            default:
+                break;
+            }
         }
     }
 
@@ -5399,6 +5465,298 @@ int draw_info(SDL_Surface *dst, const char *info, int x, int y, uint32_t fgcolor
     return 0;
 }
 
+/* Settings menu functions */
+static const char *settings_menu_items[SETTINGS_MENU_COUNT] = {
+    "Layout",
+    "Theme",
+    "Alpha",
+    "Position", 
+    "Pixel",
+    "FPS"
+};
+
+static void nds_settings_menu_get_value_str(int item, char *buf, int buflen)
+{
+    switch (item) {
+    case SETTINGS_MENU_LAYOUT:
+        if (nds_json_layouts.count > 0)
+            snprintf(buf, buflen, "%d/%d", nds_json_layouts.current + 1, nds_json_layouts.count);
+        else
+            snprintf(buf, buflen, "N/A");
+        break;
+    case SETTINGS_MENU_THEME:
+        if (nds_json_layouts.count > 0) {
+            int theme_count = nds_layout_get_theme_count();
+            int current_theme = nds_layout_get_theme();
+            snprintf(buf, buflen, "%d/%d", current_theme, theme_count);
+        } else
+            snprintf(buf, buflen, "N/A");
+        break;
+    case SETTINGS_MENU_ALPHA:
+        if (nds_disp_resize_used[DISP_MODE_H].type != LAYOUT_TYPE_TRANSPARENT)
+            snprintf(buf, buflen, "N/A");
+        else if (nds_overlay.alpha >= NDS_ALPHA_MAX)
+            snprintf(buf, buflen, "Off");
+        else
+            snprintf(buf, buflen, "%d", (NDS_ALPHA_MAX - nds_overlay.alpha) / NDS_ALPHA_STEP);
+        break;
+    case SETTINGS_MENU_POSITION:
+        if (nds_disp_resize_used[DISP_MODE_H].type != LAYOUT_TYPE_TRANSPARENT)
+            snprintf(buf, buflen, "N/A");
+        else {
+            const char *pos_names[] = {"TR", "TL", "BL", "BR"};
+            snprintf(buf, buflen, "%s", pos_names[nds_overlay.position % NDS_POS_MAX]);
+        }
+        break;
+    case SETTINGS_MENU_PIXEL:
+        snprintf(buf, buflen, "%s", nds_pixel_filter ? "Pixel" : "Blur");
+        break;
+    case SETTINGS_MENU_FPS:
+        snprintf(buf, buflen, "%s", nds_show_fps ? "On" : "Off");
+        break;
+    default:
+        buf[0] = '\0';
+    }
+}
+
+static void nds_settings_menu_adjust(int item, int dir)
+{
+    switch (item) {
+    case SETTINGS_MENU_LAYOUT:
+        if (nds_json_layouts.count > 0) {
+            if (dir > 0) {
+                nds_json_layouts.current++;
+                if (nds_json_layouts.current >= nds_json_layouts.count)
+                    nds_json_layouts.current = 0;
+            } else {
+                if (nds_json_layouts.current > 0)
+                    nds_json_layouts.current--;
+                else
+                    nds_json_layouts.current = nds_json_layouts.count - 1;
+            }
+            nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
+            nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
+            nds_settings_save_mode(nds_json_layouts.current);
+        }
+        break;
+    case SETTINGS_MENU_THEME:
+        if (nds_json_layouts.count > 0) {
+            int current_theme = nds_layout_get_theme();
+            int theme_count = nds_layout_get_theme_count();
+            int new_theme;
+            int i;
+            const char *bg_path;
+
+            if (dir > 0)
+                new_theme = (current_theme < theme_count) ? current_theme + 1 : 1;
+            else
+                new_theme = (current_theme > 1) ? current_theme - 1 : theme_count;
+
+            nds_layout_set_theme(new_theme);
+
+            /* Reload all background textures with new theme */
+            for (i = 0; i < nds_json_layouts.count; i++) {
+                if (nds_json_layouts.layouts[i].bg_tex) {
+                    SDL_DestroyTexture(nds_json_layouts.layouts[i].bg_tex);
+                    nds_json_layouts.layouts[i].bg_tex = NULL;
+                }
+                bg_path = nds_layout_get_bg_path(i);
+                if (bg_path) {
+                    nds_json_layouts.layouts[i].bg_tex = loadBackground((char *)bg_path, nds_settings_menu.renderer);
+                }
+            }
+
+            /* Update current display mode's bg_tex */
+            nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
+            nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
+            nds_settings_save_theme(new_theme);
+        }
+        break;
+    case SETTINGS_MENU_ALPHA:
+        if (nds_disp_resize_used[DISP_MODE_H].type != LAYOUT_TYPE_TRANSPARENT)
+            break;
+        if (nds_disp_resize_used[DISP_MODE_H].rotate != 0)
+            break;
+        if (dir > 0) {
+            if (nds_overlay.alpha >= NDS_ALPHA_MAX)
+                nds_overlay.alpha = NDS_ALPHA_MIN;
+            else if (nds_overlay.alpha <= NDS_ALPHA_MAX - NDS_ALPHA_STEP)
+                nds_overlay.alpha += NDS_ALPHA_STEP;
+            else
+                nds_overlay.alpha = NDS_ALPHA_MAX;
+        } else {
+            if (nds_overlay.alpha <= NDS_ALPHA_MIN)
+                nds_overlay.alpha = NDS_ALPHA_MAX;
+            else if (nds_overlay.alpha >= NDS_ALPHA_MIN + NDS_ALPHA_STEP)
+                nds_overlay.alpha -= NDS_ALPHA_STEP;
+            else
+                nds_overlay.alpha = NDS_ALPHA_MIN;
+        }
+        nds_settings_save_alpha(nds_overlay.alpha);
+        break;
+    case SETTINGS_MENU_POSITION:
+        if (nds_disp_resize_used[DISP_MODE_H].type != LAYOUT_TYPE_TRANSPARENT)
+            break;
+        if (nds_disp_resize_used[DISP_MODE_H].rotate != 0)
+            break;
+        if (dir > 0)
+            nds_overlay.position = (nds_overlay.position + 1) % NDS_POS_MAX;
+        else
+            nds_overlay.position = (nds_overlay.position + NDS_POS_MAX - 1) % NDS_POS_MAX;
+        nds_settings_save_position(nds_overlay.position);
+        break;
+    case SETTINGS_MENU_PIXEL:
+        nds_pixel_filter = !nds_pixel_filter;
+        nds_pixel_filter_dirty = 4;
+        nds_pixel_filter_gl_dirty = 1;
+        nds_settings_save_pixel_filter(nds_pixel_filter);
+        break;
+    case SETTINGS_MENU_FPS:
+        nds_show_fps = !nds_show_fps;
+        break;
+    }
+    nds_settings_menu.need_redraw = 1;
+}
+
+static void nds_settings_menu_draw(SDL_Renderer *renderer)
+{
+    int i, w, h, menu_w, menu_h, x, y;
+    int screen_w, screen_h;
+    SDL_Surface *surf;
+    SDL_Rect rect;
+    char buf[64];
+    uint32_t sel_color = 0xFFFF00;   /* Yellow for selected */
+    uint32_t norm_color = 0xFFFFFF;  /* White for normal */
+    uint32_t val_color = 0x00FF00;   /* Green for values */
+    
+    if (!nds.font) return;
+    
+    /* Cache renderer for theme reload */
+    nds_settings_menu.renderer = renderer;
+    
+    SDL_GetRendererOutputSize(renderer, &screen_w, &screen_h);
+    
+    /* Calculate menu size */
+    menu_w = 200;
+    menu_h = SETTINGS_MENU_COUNT * (LINE_H + 5) + 20;
+    
+    /* Create surface for menu */
+    surf = SDL_CreateRGBSurface(0, menu_w, menu_h, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+    if (!surf) return;
+    
+    /* Fill background with semi-transparent black */
+    SDL_FillRect(surf, NULL, SDL_MapRGBA(surf->format, 0, 0, 0, 200));
+    
+    /* Draw border */
+    rect.x = 0; rect.y = 0; rect.w = menu_w; rect.h = 2;
+    SDL_FillRect(surf, &rect, SDL_MapRGBA(surf->format, 255, 255, 255, 255));
+    rect.y = menu_h - 2;
+    SDL_FillRect(surf, &rect, SDL_MapRGBA(surf->format, 255, 255, 255, 255));
+    rect.x = 0; rect.y = 0; rect.w = 2; rect.h = menu_h;
+    SDL_FillRect(surf, &rect, SDL_MapRGBA(surf->format, 255, 255, 255, 255));
+    rect.x = menu_w - 2;
+    SDL_FillRect(surf, &rect, SDL_MapRGBA(surf->format, 255, 255, 255, 255));
+    
+    /* Draw menu items */
+    y = 10;
+    for (i = 0; i < SETTINGS_MENU_COUNT; i++) {
+        uint32_t color = (i == nds_settings_menu.selection) ? sel_color : norm_color;
+        
+        /* Draw item name */
+        draw_info(surf, settings_menu_items[i], 10, y, color, 0);
+        
+        /* Draw value */
+        nds_settings_menu_get_value_str(i, buf, sizeof(buf));
+        TTF_SizeUTF8(nds.font, buf, &w, &h);
+        draw_info(surf, buf, menu_w - w - 10, y, val_color, 0);
+        
+        y += LINE_H + 5;
+    }
+    
+    /* Convert surface to texture */
+    if (nds_settings_menu.tex) {
+        SDL_DestroyTexture(nds_settings_menu.tex);
+    }
+    nds_settings_menu.tex = SDL_CreateTextureFromSurface(renderer, surf);
+    SDL_FreeSurface(surf);
+    
+    if (nds_settings_menu.tex) {
+        SDL_SetTextureBlendMode(nds_settings_menu.tex, SDL_BLENDMODE_BLEND);
+        
+        /* Center on screen */
+        SDL_FRect dstrect;
+        dstrect.w = (float)menu_w;
+        dstrect.h = (float)menu_h;
+        dstrect.x = (screen_w - menu_w) / 2.0f;
+        dstrect.y = (screen_h - menu_h) / 2.0f;
+        
+        SDL_RenderCopyF(renderer, nds_settings_menu.tex, NULL, &dstrect);
+    }
+    
+    nds_settings_menu.need_redraw = 0;
+}
+
+static void nds_fps_draw(SDL_Renderer *renderer)
+{
+    static Uint32 last_time = 0;
+    static int frame_count = 0;
+    static float current_fps = 0.0f;
+    static SDL_Texture *fps_tex = NULL;
+    static int tex_w = 0, tex_h = 0;
+    Uint32 current_time;
+    int out_w, out_h;
+    
+    if (!nds_show_fps) {
+        if (fps_tex) {
+            SDL_DestroyTexture(fps_tex);
+            fps_tex = NULL;
+        }
+        return;
+    }
+    
+    if (!nds.font || !renderer) return;
+    
+    frame_count++;
+    current_time = SDL_GetTicks();
+    
+    /* Update FPS every second */
+    if (current_time - last_time >= 1000 || fps_tex == NULL) {
+        SDL_Surface *surf;
+        SDL_Color col = {0xcc, 0xcc, 0x00, 0xff};
+        char fps_str[32];
+        
+        if (current_time - last_time >= 1000) {
+            current_fps = (float)frame_count * 1000.0f / (current_time - last_time);
+            frame_count = 0;
+            last_time = current_time;
+        }
+        
+        snprintf(fps_str, sizeof(fps_str), "%.1f", current_fps);
+        
+        surf = TTF_RenderUTF8_Solid(nds.font, fps_str, col);
+        if (surf) {
+            if (fps_tex) {
+                SDL_DestroyTexture(fps_tex);
+            }
+            fps_tex = SDL_CreateTextureFromSurface(renderer, surf);
+            tex_w = surf->w;
+            tex_h = surf->h;
+            SDL_FreeSurface(surf);
+        }
+    }
+    
+    /* Draw FPS texture */
+    if (fps_tex) {
+        SDL_FRect dstrect;
+        SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
+        dstrect.x = (float)(out_w - tex_w - 5);
+        dstrect.y = 5.0f;
+        dstrect.w = (float)tex_w;
+        dstrect.h = (float)tex_h;
+        SDL_RenderCopyF(renderer, fps_tex, NULL, &dstrect);
+    }
+}
+
 static int get_current_menu_layer(void)
 {
     int cc = 0;
@@ -7234,6 +7592,16 @@ void SDL_RenderPresent(SDL_Renderer *renderer)
     SDL_bool presented = SDL_TRUE;
 
     CHECK_RENDERER_MAGIC(renderer, );
+
+    /* Draw FPS if enabled */
+    if (nds_show_fps && disp_mode != DISP_MODE_MENU) {
+        nds_fps_draw(renderer);
+    }
+
+    /* Draw settings menu if visible */
+    if (nds_settings_menu.visible && disp_mode != DISP_MODE_MENU) {
+        nds_settings_menu_draw(renderer);
+    }
 
     FlushRenderCommands(renderer); /* time to send everything to the GPU! */
 
