@@ -2421,7 +2421,7 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
         /* NDS overlay hotkeys */
         switch (event->key.keysym.scancode) {
         case SDL_SCANCODE_Z:
-            /* Increase alpha (more opaque / towards disabled), wrap around */
+            /* Cycle alpha (more opaque -> most transparent -> wrap) */
             /* Only allowed in LAYOUT_TYPE_TRANSPARENT mode, and not in rotate mode */
             if (nds_disp_resize_used[DISP_MODE_H].type != LAYOUT_TYPE_TRANSPARENT)
                 break;
@@ -2436,22 +2436,6 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
             nds_settings_save_alpha(nds_overlay.alpha);
             printf("Alpha: %d\n", nds_overlay.alpha);
             break;
-        case SDL_SCANCODE_R:
-            /* Decrease alpha (more transparent), wrap around */
-            /* Only allowed in LAYOUT_TYPE_TRANSPARENT mode, and not in rotate mode */
-            if (nds_disp_resize_used[DISP_MODE_H].type != LAYOUT_TYPE_TRANSPARENT)
-                break;
-            if (nds_disp_resize_used[DISP_MODE_H].rotate != 0)
-                break;
-            if (nds_overlay.alpha <= NDS_ALPHA_MIN)
-                nds_overlay.alpha = NDS_ALPHA_MAX;  /* Wrap to disabled/opaque */
-            else if (nds_overlay.alpha >= NDS_ALPHA_MIN + NDS_ALPHA_STEP)
-                nds_overlay.alpha -= NDS_ALPHA_STEP;
-            else
-                nds_overlay.alpha = NDS_ALPHA_MIN;
-            nds_settings_save_alpha(nds_overlay.alpha);
-            printf("Alpha: %d\n", nds_overlay.alpha);
-            break;
         case SDL_SCANCODE_P:
             /* Toggle pixel filter (nearest/linear) */
             nds_pixel_filter = !nds_pixel_filter;
@@ -2460,7 +2444,7 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
             nds_settings_save_pixel_filter(nds_pixel_filter);
             printf("Pixel filter: %s\n", nds_pixel_filter ? "Pixel" : "Blur");
             break;
-        case SDL_SCANCODE_Y:
+        case SDL_SCANCODE_R:
             /* Cycle transparent screen position (TR -> TL -> BL -> BR -> TR) */
             /* Only allowed in LAYOUT_TYPE_TRANSPARENT mode, and not in rotate mode */
             if (nds_disp_resize_used[DISP_MODE_H].type != LAYOUT_TYPE_TRANSPARENT)
@@ -2474,21 +2458,8 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
                    nds_overlay.position == 1 ? "Top-Left" :
                    nds_overlay.position == 2 ? "Bottom-Left" : "Bottom-Right");
             break;
-        case SDL_SCANCODE_UP:
-            /* Switch to previous layout */
-            if (nds_json_layouts.count > 0) {
-                if (nds_json_layouts.current > 0)
-                    nds_json_layouts.current--;
-                else
-                    nds_json_layouts.current = nds_json_layouts.count - 1;
-                nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
-                nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
-                nds_settings_save_mode(nds_json_layouts.current);
-                printf("Layout switched to %d/%d (rotate=%d)\n", nds_json_layouts.current, nds_json_layouts.count, nds_disp_resize_used[DISP_MODE_H].rotate);
-            }
-            break;
-        case SDL_SCANCODE_DOWN:
-            /* Switch to next layout */
+        case SDL_SCANCODE_L:
+            /* Switch to next layout (cycle) */
             if (nds_json_layouts.count > 0) {
                 nds_json_layouts.current++;
                 if (nds_json_layouts.current >= nds_json_layouts.count)
@@ -2496,47 +2467,38 @@ static int SDLCALL SDL_RendererEventWatch(void *userdata, SDL_Event *event)
                 nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
                 nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
                 nds_settings_save_mode(nds_json_layouts.current);
-                printf("Layout switched to %d/%d (rotate=%d)\n", nds_json_layouts.current, nds_json_layouts.count, nds_disp_resize_used[DISP_MODE_H].rotate);
+                printf("Layout: %d/%d (rotate=%d)\n", nds_json_layouts.current + 1, nds_json_layouts.count, nds_disp_resize_used[DISP_MODE_H].rotate);
             }
             break;
-        case SDL_SCANCODE_LEFT:
-        case SDL_SCANCODE_RIGHT:
-            /* Switch theme (reload background images from different theme folder) */
+        case SDL_SCANCODE_T:
+            /* Switch to next theme (cycle) */
             if (nds_json_layouts.count > 0) {
                 int current_theme = nds_layout_get_theme();
                 int theme_count = nds_layout_get_theme_count();
-                int new_theme;
+                int new_theme = (current_theme < theme_count) ? current_theme + 1 : 1;
                 int i;
                 const char *bg_path;
 
-                if (event->key.keysym.scancode == SDL_SCANCODE_LEFT) {
-                    new_theme = (current_theme > 1) ? current_theme - 1 : theme_count;
-                } else {
-                    new_theme = (current_theme < theme_count) ? current_theme + 1 : 1;
-                }
+                nds_layout_set_theme(new_theme);
 
-                if (new_theme != current_theme) {
-                    nds_layout_set_theme(new_theme);
-
-                    /* Reload all background textures with new theme */
-                    for (i = 0; i < nds_json_layouts.count; i++) {
-                        if (nds_json_layouts.layouts[i].bg_tex) {
-                            SDL_DestroyTexture(nds_json_layouts.layouts[i].bg_tex);
-                            nds_json_layouts.layouts[i].bg_tex = NULL;
-                        }
-                        bg_path = nds_layout_get_bg_path(i);
-                        if (bg_path) {
-                            nds_json_layouts.layouts[i].bg_tex = loadBackground((char *)bg_path, renderer);
-                        }
+                /* Reload all background textures with new theme */
+                for (i = 0; i < nds_json_layouts.count; i++) {
+                    if (nds_json_layouts.layouts[i].bg_tex) {
+                        SDL_DestroyTexture(nds_json_layouts.layouts[i].bg_tex);
+                        nds_json_layouts.layouts[i].bg_tex = NULL;
                     }
-
-                    /* Update current display mode's bg_tex */
-                    nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
-                    nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
-
-                    nds_settings_save_theme(new_theme);
-                    printf("Theme switched to %d/%d\n", new_theme, theme_count);
+                    bg_path = nds_layout_get_bg_path(i);
+                    if (bg_path) {
+                        nds_json_layouts.layouts[i].bg_tex = loadBackground((char *)bg_path, renderer);
+                    }
                 }
+
+                /* Update current display mode's bg_tex */
+                nds_disp_resize_used[DISP_MODE_H] = nds_json_layouts.layouts[nds_json_layouts.current];
+                nds_disp_resize_used[DISP_MODE_V] = nds_json_layouts.layouts[nds_json_layouts.current];
+
+                nds_settings_save_theme(new_theme);
+                printf("Theme: %d/%d\n", new_theme, theme_count);
             }
             break;
         default:
