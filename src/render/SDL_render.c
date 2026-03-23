@@ -688,6 +688,134 @@ static struct nds_disp_resize disp_320p[DISP_TGT_MODE_MAX] = {
 	},
 };
 
+static struct nds_disp_resize disp_1200p[DISP_TGT_MODE_MAX] = {
+	[DISP_TGT_MODE_H_SINGLE] = {
+		.tgt_rect = {
+			{160, 0, 1600, 1200},
+			{0, 0, 0, 0},
+		},
+	},
+	[DISP_TGT_MODE_MENU] = {
+		.tgt_rect = {
+			{0, 0, 800, 480},
+			{0, 0, 1920, 1200},
+		},
+	},
+};
+
+/* 2560x1440 (2K/QHD) - 16:9 */
+static struct nds_disp_resize disp_1440p[DISP_TGT_MODE_MAX] = {
+	[DISP_TGT_MODE_H_SINGLE] = {
+		.tgt_rect = {
+			{320, 0, 1920, 1440},
+			{0, 0, 0, 0},
+		},
+	},
+	[DISP_TGT_MODE_MENU] = {
+		.tgt_rect = {
+			{0, 0, 800, 480},
+			{0, 0, 2560, 1440},
+		},
+	},
+};
+
+/* 2560x1600 (WQXGA) - 16:10 */
+static struct nds_disp_resize disp_1600p[DISP_TGT_MODE_MAX] = {
+	[DISP_TGT_MODE_H_SINGLE] = {
+		.tgt_rect = {
+			{480, 0, 1600, 1600},
+			{0, 0, 0, 0},
+		},
+	},
+	[DISP_TGT_MODE_MENU] = {
+		.tgt_rect = {
+			{0, 0, 800, 480},
+			{0, 0, 2560, 1600},
+		},
+	},
+};
+
+/* 3840x2160 (4K/UHD) - 16:9 */
+static struct nds_disp_resize disp_4k[DISP_TGT_MODE_MAX] = {
+	[DISP_TGT_MODE_H_SINGLE] = {
+		.tgt_rect = {
+			{480, 0, 2880, 2160},
+			{0, 0, 0, 0},
+		},
+	},
+	[DISP_TGT_MODE_MENU] = {
+		.tgt_rect = {
+			{0, 0, 800, 480},
+			{0, 0, 3840, 2160},
+		},
+	},
+};
+
+/* 1366x768 - 常见笔记本分辨率 - 16:9 */
+static struct nds_disp_resize disp_768p_wide[DISP_TGT_MODE_MAX] = {
+	[DISP_TGT_MODE_H_SINGLE] = {
+		.tgt_rect = {
+			{171, 0, 1024, 768},
+			{0, 0, 0, 0},
+		},
+	},
+	[DISP_TGT_MODE_MENU] = {
+		.tgt_rect = {
+			{0, 0, 800, 480},
+			{0, 0, 1366, 768},
+		},
+	},
+};
+
+/* 1280x800 - 常见笔记本分辨率 - 16:10 */
+static struct nds_disp_resize disp_800p[DISP_TGT_MODE_MAX] = {
+	[DISP_TGT_MODE_H_SINGLE] = {
+		.tgt_rect = {
+			{128, 0, 1024, 800},
+			{0, 0, 0, 0},
+		},
+	},
+	[DISP_TGT_MODE_MENU] = {
+		.tgt_rect = {
+			{0, 0, 800, 480},
+			{0, 0, 1280, 800},
+		},
+	},
+};
+
+/* 1600x1200 (UXGA) - 4:3 */
+static struct nds_disp_resize disp_uxga[DISP_TGT_MODE_MAX] = {
+	[DISP_TGT_MODE_H_SINGLE] = {
+		.tgt_rect = {
+			{0, 0, 1600, 1200},
+			{0, 0, 0, 0},
+		},
+	},
+	[DISP_TGT_MODE_MENU] = {
+		.tgt_rect = {
+			{0, 0, 800, 480},
+			{0, 0, 1600, 1200},
+		},
+	},
+};
+
+/* 720x576 (576p/PAL) - 5:4 */
+static struct nds_disp_resize disp_576p[DISP_TGT_MODE_MAX] = {
+	[DISP_TGT_MODE_H_SINGLE] = {
+		.tgt_rect = {
+			{0, 0, 720, 576},
+			{0, 0, 0, 0},
+		},
+	},
+	[DISP_TGT_MODE_MENU] = {
+		.tgt_rect = {
+			{0, 0, 720, 480},
+			{0, 0, 720, 576},
+		},
+	},
+};
+
+
 static struct nds_disp_resize nds_disp_resize_used[DISP_MODE_MAX];
 struct nds_disp_resize *res_sel = NULL;
 
@@ -1423,6 +1551,22 @@ static void nds_drastic_init(SDL_Renderer *mRenderer, SDL_Window *window)
 		res_sel = disp_720p;
 	else if (rect.w == 1920 && rect.h == 1080)
 		res_sel = disp_1080p;
+	else if (rect.w == 1920 && rect.h == 1200)
+		res_sel = disp_1200p;
+	else if (rect.w == 2560 && rect.h == 1440)
+		res_sel = disp_1440p;
+	else if (rect.w == 2560 && rect.h == 1600)
+		res_sel = disp_1600p;
+	else if (rect.w == 3840 && rect.h == 2160)
+		res_sel = disp_4k;
+	else if (rect.w == 1600 && rect.h == 1200)
+		res_sel = disp_uxga;
+	else if (rect.w == 720 && rect.h == 576)
+		res_sel = disp_576p;
+	else if (rect.w == 1366 && rect.h == 768)
+		res_sel = disp_768p_wide;
+	else if (rect.w == 1280 && rect.h == 800)
+		res_sel = disp_800p;
 	else if (rect.w == 1024 && rect.h == 768)
 		res_sel = disp_768p;
 	else if (rect.w == 640 && rect.h == 480)
