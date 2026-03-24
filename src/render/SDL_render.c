@@ -5848,7 +5848,8 @@ static void nds_fps_draw(SDL_Renderer *renderer)
     static SDL_Texture *fps_tex = NULL;
     static int tex_w = 0, tex_h = 0;
     Uint32 current_time;
-    int out_w, out_h;
+    struct nds_disp_resize *cur_res;
+    SDL_Rect *screen0;
     
     if (!nds_show_fps) {
         if (fps_tex) {
@@ -5859,6 +5860,13 @@ static void nds_fps_draw(SDL_Renderer *renderer)
     }
     
     if (!nds.font || !renderer) return;
+    
+    /* Get current layout's screen0 rect */
+    cur_res = &nds_disp_resize_used[disp_mode];
+    screen0 = &cur_res->tgt_rect[0];
+    
+    /* Skip if screen0 has no valid size */
+    if (screen0->w <= 0 || screen0->h <= 0) return;
     
     frame_count++;
     current_time = SDL_GetTicks();
@@ -5889,12 +5897,11 @@ static void nds_fps_draw(SDL_Renderer *renderer)
         }
     }
     
-    /* Draw FPS texture */
+    /* Draw FPS texture at top-right corner of screen0 */
     if (fps_tex) {
         SDL_FRect dstrect;
-        SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
-        dstrect.x = (float)(out_w - tex_w - 5);
-        dstrect.y = 5.0f;
+        dstrect.x = (float)(screen0->x + screen0->w - tex_w - 5);
+        dstrect.y = (float)(screen0->y + 5);
         dstrect.w = (float)tex_w;
         dstrect.h = (float)tex_h;
         SDL_RenderCopyF(renderer, fps_tex, NULL, &dstrect);
